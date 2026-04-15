@@ -1,9 +1,9 @@
 export type Bindings = {
   DB: D1Database
   ATTACHMENTS: R2Bucket
-  AUTHENTIK_URL: string
-  AUTHENTIK_CLIENT_ID: string
-  AUTHENTIK_CLIENT_SECRET: string
+  OIDC_ISSUER: string
+  OIDC_CLIENT_ID: string
+  OIDC_CLIENT_SECRET: string
   APP_URL: string
   RESEND_API_KEY: string
   PIPE_SECRET: string

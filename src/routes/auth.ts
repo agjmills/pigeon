@@ -1,8 +1,21 @@
 import { Hono } from 'hono'
-import { setCookie, deleteCookie } from 'hono/cookie'
+import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { AppEnv } from '../types'
 
 export const authRoutes = new Hono<AppEnv>()
+
+type OIDCConfig = {
+  authorization_endpoint: string
+  token_endpoint: string
+  userinfo_endpoint: string
+}
+
+async function discoverOIDC(issuer: string): Promise<OIDCConfig> {
+  const url = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`OIDC discovery failed for ${url}: ${res.status}`)
+  return res.json<OIDCConfig>()
+}
 
 async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
   const array = new Uint8Array(32)
@@ -25,10 +38,10 @@ async function generateToken(): Promise<string> {
 }
 
 authRoutes.get('/login', async (c) => {
+  const oidc = await discoverOIDC(c.env.OIDC_ISSUER)
   const { verifier, challenge } = await generatePKCE()
   const state = await generateToken()
 
-  // Store verifier + state temporarily in a short-lived cookie
   setCookie(c, 'pkce_verifier', verifier, {
     httpOnly: true, secure: true, sameSite: 'Lax', maxAge: 300, path: '/',
   })
@@ -38,7 +51,7 @@ authRoutes.get('/login', async (c) => {
 
   const params = new URLSearchParams({
     response_type: 'code',
-    client_id: c.env.AUTHENTIK_CLIENT_ID,
+    client_id: c.env.OIDC_CLIENT_ID,
     redirect_uri: `${c.env.APP_URL}/auth/callback`,
     scope: 'openid profile email',
     state,
@@ -46,7 +59,7 @@ authRoutes.get('/login', async (c) => {
     code_challenge_method: 'S256',
   })
 
-  return c.redirect(`${c.env.AUTHENTIK_URL}/application/o/authorize/?${params}`)
+  return c.redirect(`${oidc.authorization_endpoint}?${params}`)
 })
 
 authRoutes.get('/callback', async (c) => {
@@ -55,24 +68,24 @@ authRoutes.get('/callback', async (c) => {
   if (error) return c.text(`Auth error: ${error}`, 400)
   if (!code || !state) return c.text('Missing code or state', 400)
 
-  const { getCookie: gc } = await import('hono/cookie')
-  const storedState = gc(c, 'oauth_state')
-  const verifier = gc(c, 'pkce_verifier')
+  const storedState = getCookie(c, 'oauth_state')
+  const verifier = getCookie(c, 'pkce_verifier')
 
   if (!storedState || state !== storedState || !verifier) {
     return c.text('Invalid state — possible CSRF', 400)
   }
 
-  // Exchange code for tokens
-  const tokenRes = await fetch(`${c.env.AUTHENTIK_URL}/application/o/token/`, {
+  const oidc = await discoverOIDC(c.env.OIDC_ISSUER)
+
+  const tokenRes = await fetch(oidc.token_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: `${c.env.APP_URL}/auth/callback`,
-      client_id: c.env.AUTHENTIK_CLIENT_ID,
-      client_secret: c.env.AUTHENTIK_CLIENT_SECRET,
+      client_id: c.env.OIDC_CLIENT_ID,
+      client_secret: c.env.OIDC_CLIENT_SECRET,
       code_verifier: verifier,
     }),
   })
@@ -84,8 +97,7 @@ authRoutes.get('/callback', async (c) => {
 
   const tokens = await tokenRes.json<{ access_token: string }>()
 
-  // Fetch user info
-  const userRes = await fetch(`${c.env.AUTHENTIK_URL}/application/o/userinfo/`, {
+  const userRes = await fetch(oidc.userinfo_endpoint, {
     headers: { Authorization: `Bearer ${tokens.access_token}` },
   })
 
@@ -93,7 +105,6 @@ authRoutes.get('/callback', async (c) => {
 
   const userInfo = await userRes.json<{ email: string; name: string }>()
 
-  // Create session (7-day expiry)
   const sessionToken = await generateToken()
   const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7
 
@@ -114,8 +125,7 @@ authRoutes.get('/callback', async (c) => {
 })
 
 authRoutes.get('/logout', async (c) => {
-  const { getCookie: gc } = await import('hono/cookie')
-  const token = gc(c, 'session')
+  const token = getCookie(c, 'session')
   if (token) {
     await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run()
   }

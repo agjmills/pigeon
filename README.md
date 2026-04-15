@@ -2,57 +2,84 @@
 
 Self-hosted multi-domain email inbox built on Cloudflare Workers, D1, R2, and HTMX. Receive email via Cloudflare Email Routing, manage conversations in a clean web UI, reply via Resend.
 
-## Stack
+**Everything runs on the Cloudflare free tier** (Workers, D1, R2). Outbound replies use [Resend](https://resend.com) (free up to 3,000/month).
 
-- **Runtime**: Cloudflare Workers (TypeScript + Hono)
-- **Database**: Cloudflare D1 (SQLite)
-- **Attachments**: Cloudflare R2
-- **Frontend**: HTMX + Tailwind CDN (no build step)
-- **Auth**: OIDC (tested with Authentik)
-- **Outbound email**: Resend
+## How it works
 
-## Setup
+```
+support@yourdomain.com
+        │
+        ▼
+Cloudflare Email Routing
+        │
+        ▼
+  Pigeon Worker  ──── stores in D1 + R2
+        │
+        ▼
+  pigeon.yourdomain.com  (protected by OIDC)
+```
 
-### 1. Configure wrangler
+## Prerequisites
+
+- Cloudflare account (free)
+- [Resend](https://resend.com) account (free)
+- An OIDC provider (Authentik, Auth0, Keycloak, etc.)
+- Node.js + [Wrangler](https://developers.cloudflare.com/workers/wrangler/)
+
+## Deploy
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/agjmills/pigeon
+cd pigeon
+npm install
+```
+
+### 2. Create Cloudflare resources
+
+```bash
+npx wrangler d1 create pigeon           # note the database_id in the output
+npx wrangler r2 bucket create pigeon-attachments
+```
+
+### 3. Configure
 
 ```bash
 cp wrangler.toml wrangler.local.toml
 ```
 
-Edit `wrangler.local.toml` with your values:
-- `AUTHENTIK_URL` — your OIDC provider base URL
-- `AUTHENTIK_CLIENT_ID` — OAuth2 client ID
-- `APP_URL` — where Courier is deployed
+Edit `wrangler.local.toml`:
 
-### 2. Create Cloudflare resources
+```toml
+[vars]
+OIDC_ISSUER = "https://auth.example.com/..."   # must expose /.well-known/openid-configuration
+OIDC_CLIENT_ID = "pigeon"                      # OAuth2 client ID from your provider
+APP_URL = "https://pigeon.example.com"         # where you'll deploy this
 
-```bash
-npm install
-npm run db:create           # creates D1 database, copy the ID into wrangler.local.toml
-wrangler r2 bucket create courier-attachments
-```
+[[d1_databases]]
+binding = "DB"
+database_name = "pigeon"
+database_id = "<id from step 2>"
 
-### 3. Run migrations
-
-```bash
-npm run db:migrate:local    # local dev
-npm run db:migrate:remote   # production
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "pigeon-attachments"
 ```
 
 ### 4. Set secrets
 
 ```bash
-wrangler secret put AUTHENTIK_CLIENT_SECRET
-wrangler secret put RESEND_API_KEY
-wrangler secret put SESSION_SECRET   # openssl rand -hex 32
+npx wrangler secret put OIDC_CLIENT_SECRET   # from your OIDC provider
+npx wrangler secret put RESEND_API_KEY       # from resend.com
+npx wrangler secret put SESSION_SECRET       # openssl rand -hex 32
 ```
 
-### 5. OIDC provider setup
+### 5. Run database migrations
 
-Create an OAuth2/OIDC application in your provider:
-- **Redirect URI**: `https://<APP_URL>/auth/callback`
-- **Grant type**: Authorization Code + PKCE
-- **Scopes**: `openid profile email`
+```bash
+npm run db:migrate:remote
+```
 
 ### 6. Deploy
 
@@ -60,26 +87,36 @@ Create an OAuth2/OIDC application in your provider:
 npm run deploy
 ```
 
-### 7. Add mailboxes
+### 7. OIDC provider
 
-Once logged in, use **+ Add mailbox** in the sidebar to register each email address (e.g. `support@example.com`).
+Create an OAuth2 application in your provider with:
+- **Redirect URI**: `https://<APP_URL>/auth/callback`
+- **Grant type**: Authorization Code + PKCE
+- **Scopes**: `openid profile email`
 
 ### 8. Cloudflare Email Routing
 
-For each domain, add routing rules in the Cloudflare dashboard:
-- **Email Routing → Rules** → address or catch-all → **Send to Worker** → `courier`
+For each domain you want to receive at (Cloudflare dashboard → your domain → Email → Email Routing):
+1. Enable Email Routing and accept the MX records
+2. Add a rule: address `support@yourdomain.com` → **Send to Worker** → `pigeon`
+3. Or use a catch-all rule to send everything to Pigeon
 
-### Sending replies
+### 9. Sending domains (Resend)
 
-Replies are sent via [Resend](https://resend.com). Add and verify each sending domain in the Resend dashboard and add the provided DKIM/SPF records in Cloudflare DNS.
+In the Resend dashboard, add each domain you want to send replies from and add the provided DKIM/SPF DNS records in Cloudflare.
 
-## Development
+### 10. Add mailboxes
+
+Log in and use **+ Add mailbox** in the sidebar to register each address (e.g. `support@yourdomain.com`). Pigeon will route inbound email to the matching mailbox.
+
+## Local development
 
 ```bash
+npm run db:migrate:local
 npm run dev
 ```
 
-Uses Wrangler's local D1/R2 emulation. Set local secrets in `.dev.vars`:
+Set secrets locally in `.dev.vars` (gitignored):
 
 ```ini
 AUTHENTIK_CLIENT_SECRET=...

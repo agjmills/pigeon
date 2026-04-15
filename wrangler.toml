@@ -7,8 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 # wrangler.local.toml is gitignored.
 #
 # [vars]
-# AUTHENTIK_URL = "https://auth.example.com"
-# AUTHENTIK_CLIENT_ID = "pigeon"
+# OIDC_ISSUER = "https://auth.example.com/..."   # OIDC discovery base — must expose /.well-known/openid-configuration
+# OIDC_CLIENT_ID = "pigeon"
 # APP_URL = "https://pigeon.example.com"
 #
 # [[d1_databases]]
@@ -21,6 +21,6 @@ compatibility_flags = ["nodejs_compat"]
 # bucket_name = "pigeon-attachments"
 #
 # Secrets (never in toml — set via: wrangler secret put <NAME>):
-#   AUTHENTIK_CLIENT_SECRET
+#   OIDC_CLIENT_SECRET
 #   RESEND_API_KEY
 #   SESSION_SECRET       random 32-byte hex
