@@ -8,7 +8,7 @@ export type Bindings = {
   RESEND_API_KEY: string
   PIPE_SECRET: string
   SESSION_SECRET: string
-  CLOUDFLARE_API_TOKEN: string
+  CF_EMAIL_TOKEN: string
 }
 
 export type Variables = {

@@ -56,10 +56,11 @@ inboxRoutes.post('/mailboxes', async (c) => {
   let cfError: string | null = null
   try {
     const domain = email.split('@')[1]
-    const zoneId = await getZoneId(c.env.CLOUDFLARE_API_TOKEN, domain)
-    await enableEmailRouting(c.env.CLOUDFLARE_API_TOKEN, zoneId)
+    console.log('CF_EMAIL_TOKEN length:', c.env.CF_EMAIL_TOKEN?.length, 'first4:', c.env.CF_EMAIL_TOKEN?.slice(0, 4))
+    const zoneId = await getZoneId(c.env.CF_EMAIL_TOKEN, domain)
+    await enableEmailRouting(c.env.CF_EMAIL_TOKEN, zoneId)
     const ruleId = await createRoutingRule(
-      c.env.CLOUDFLARE_API_TOKEN, zoneId, email, 'pigeon'
+      c.env.CF_EMAIL_TOKEN, zoneId, email, 'pigeon'
     )
     await updateMailboxCfIds(c.env.DB, mailboxId, zoneId, ruleId)
   } catch (err) {
@@ -124,7 +125,7 @@ inboxRoutes.post('/mailboxes/:id/delete', async (c) => {
   if (mailbox.cf_zone_id && mailbox.cf_rule_id) {
     try {
       await deleteRoutingRule(
-        c.env.CLOUDFLARE_API_TOKEN, mailbox.cf_zone_id, mailbox.cf_rule_id
+        c.env.CF_EMAIL_TOKEN, mailbox.cf_zone_id, mailbox.cf_rule_id
       )
     } catch (err) {
       console.error('Failed to delete CF routing rule:', err)
@@ -140,27 +141,27 @@ inboxRoutes.post('/mailboxes/:id/delete', async (c) => {
 function mailboxForm(opts: { error?: string; email?: string; name?: string } = {}): string {
   return `
     <div class="max-w-md mx-auto mt-12 px-4">
-      <h2 class="text-lg font-semibold text-gray-900 mb-6">Add mailbox</h2>
-      ${opts.error ? `<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">${escapeHtml(opts.error)}</div>` : ''}
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">Add mailbox</h2>
+      ${opts.error ? `<div class="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-md text-sm text-red-700 dark:text-red-400">${escapeHtml(opts.error)}</div>` : ''}
       <form method="POST" action="/mailboxes" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Email address</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email address</label>
           <input type="email" name="email" required value="${escapeHtml(opts.email ?? '')}"
                  placeholder="support@cleargym.uk"
-                 class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                 class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Display name</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Display name</label>
           <input type="text" name="name" required value="${escapeHtml(opts.name ?? '')}"
                  placeholder="ClearGym Support"
-                 class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                 class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <button type="submit"
                 class="w-full px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700">
           Add mailbox
         </button>
       </form>
-      <p class="mt-3 text-xs text-gray-400">
+      <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
         Cloudflare Email Routing will be configured automatically.
       </p>
     </div>`
@@ -169,27 +170,27 @@ function mailboxForm(opts: { error?: string; email?: string; name?: string } = {
 function editMailboxForm(id: number, name: string, email: string): string {
   return `
     <div class="max-w-md mx-auto mt-12 px-4">
-      <h2 class="text-lg font-semibold text-gray-900 mb-1">Edit mailbox</h2>
-      <p class="text-sm text-gray-500 mb-6">${escapeHtml(email)}</p>
+      <h2 class="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-1">Edit mailbox</h2>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">${escapeHtml(email)}</p>
       <form method="POST" action="/mailboxes/${id}/edit" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Display name</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Display name</label>
           <input type="text" name="name" required value="${escapeHtml(name)}"
-                 class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                 class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <div class="flex gap-3">
           <button type="submit"
                   class="flex-1 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700">
             Save
           </button>
-          <a href="/" class="flex-1 px-4 py-2 text-center border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50">
+          <a href="/" class="flex-1 px-4 py-2 text-center border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-md hover:bg-gray-50 dark:hover:bg-gray-700">
             Cancel
           </a>
         </div>
       </form>
-      <div class="mt-8 pt-6 border-t border-gray-200">
-        <h3 class="text-sm font-medium text-red-700 mb-2">Danger zone</h3>
-        <p class="text-xs text-gray-500 mb-3">
+      <div class="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+        <h3 class="text-sm font-medium text-red-700 dark:text-red-400 mb-2">Danger zone</h3>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
           Deletes the mailbox and removes the Cloudflare Email Routing rule.
           Existing conversations are not deleted.
         </p>

@@ -7,24 +7,24 @@ export function conversationView(conv: Conversation, messages: Message[]): strin
   const messageThread = messages.map(msg => {
     const isOutbound = msg.direction === 'outbound'
     const body = msg.body_text
-      ? `<pre class="whitespace-pre-wrap font-sans text-sm text-gray-700 leading-relaxed">${escapeHtml(msg.body_text)}</pre>`
+      ? `<pre class="whitespace-pre-wrap font-sans text-sm text-gray-700 dark:text-gray-300 leading-relaxed">${escapeHtml(msg.body_text)}</pre>`
       : msg.body_html
         ? `<div class="prose prose-sm max-w-none text-sm">${msg.body_html}</div>`
-        : `<p class="text-sm text-gray-400 italic">No body</p>`
+        : `<p class="text-sm text-gray-400 dark:text-gray-500 italic">No body</p>`
 
     return `
       <div class="flex gap-3 ${isOutbound ? 'flex-row-reverse' : ''}">
-        <div class="w-8 h-8 rounded-full ${isOutbound ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-600'} flex items-center justify-center text-xs font-semibold shrink-0 mt-1">
+        <div class="w-8 h-8 rounded-full ${isOutbound ? 'bg-indigo-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'} flex items-center justify-center text-xs font-semibold shrink-0 mt-1">
           ${isOutbound ? 'Me' : escapeHtml((msg.from_name || msg.from_email).charAt(0).toUpperCase())}
         </div>
         <div class="flex-1 min-w-0 max-w-2xl">
           <div class="flex items-baseline gap-2 mb-1 ${isOutbound ? 'flex-row-reverse' : ''}">
-            <span class="text-xs font-medium text-gray-700">
+            <span class="text-xs font-medium text-gray-700 dark:text-gray-300">
               ${isOutbound ? escapeHtml(msg.from_email) : escapeHtml(msg.from_name || msg.from_email)}
             </span>
-            <span class="text-xs text-gray-400">${formatDate(msg.created_at)}</span>
+            <span class="text-xs text-gray-400 dark:text-gray-500">${formatDate(msg.created_at)}</span>
           </div>
-          <div class="rounded-lg px-4 py-3 ${isOutbound ? 'bg-indigo-50 border border-indigo-100' : 'bg-white border border-gray-200'}">
+          <div class="rounded-lg px-4 py-3 ${isOutbound ? 'bg-indigo-50 dark:bg-indigo-900/40 border border-indigo-100 dark:border-indigo-800' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'}">
             ${body}
           </div>
         </div>
@@ -33,15 +33,15 @@ export function conversationView(conv: Conversation, messages: Message[]): strin
 
   return `
     <!-- Header -->
-    <div class="bg-white border-b border-gray-200 px-6 py-4 flex items-start justify-between gap-4 sticky top-0 z-10">
+    <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-start justify-between gap-4 sticky top-0 z-10">
       <div class="min-w-0">
         <div class="flex items-center gap-2 mb-1">
-          <a href="/" hx-boost="true" class="text-xs text-gray-400 hover:text-gray-600">← Back</a>
+          <a href="/" hx-boost="true" class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">← Back</a>
         </div>
-        <h2 class="text-base font-semibold text-gray-900 truncate">${escapeHtml(conv.subject)}</h2>
-        <p class="text-xs text-gray-500 mt-0.5">
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100 truncate">${escapeHtml(conv.subject)}</h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
           ${escapeHtml(conv.customer_name || conv.customer_email)}
-          <span class="text-gray-300 mx-1">·</span>
+          <span class="text-gray-300 dark:text-gray-600 mx-1">·</span>
           ${escapeHtml(conv.mailbox_email)}
         </p>
       </div>
@@ -51,8 +51,8 @@ export function conversationView(conv: Conversation, messages: Message[]): strin
             hx-swap="outerHTML">
         <button type="submit"
                 class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md border ${isOpen
-                  ? 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                  : 'border-green-300 text-green-700 hover:bg-green-50'}">
+                  ? 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  : 'border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/30'}">
           ${isOpen ? 'Close' : 'Reopen'}
         </button>
       </form>
@@ -65,9 +65,9 @@ export function conversationView(conv: Conversation, messages: Message[]): strin
       <!-- Reply form -->
       ${isOpen ? replyForm(conv) : `
         <div class="text-center py-6">
-          <p class="text-sm text-gray-400">This conversation is closed.</p>
+          <p class="text-sm text-gray-400 dark:text-gray-500">This conversation is closed.</p>
           <form hx-post="/c/${conv.id}/status" hx-target="closest div[data-conv]" hx-swap="outerHTML">
-            <button class="mt-2 text-sm text-indigo-600 hover:underline">Reopen to reply</button>
+            <button class="mt-2 text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Reopen to reply</button>
           </form>
         </div>`}
     </div>`
@@ -75,7 +75,7 @@ export function conversationView(conv: Conversation, messages: Message[]): strin
 
 function replyForm(conv: Conversation): string {
   return `
-    <div class="border-t border-gray-200 pt-6">
+    <div class="border-t border-gray-200 dark:border-gray-700 pt-6">
       <form hx-post="/c/${conv.id}/reply"
             hx-target="div[data-conv=${conv.id}]"
             hx-swap="outerHTML"
@@ -85,9 +85,9 @@ function replyForm(conv: Conversation): string {
                   rows="5"
                   required
                   placeholder="Write your reply…"
-                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-y"></textarea>
+                  class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-y"></textarea>
         <div class="flex items-center justify-between">
-          <span class="text-xs text-gray-400">
+          <span class="text-xs text-gray-400 dark:text-gray-500">
             Replying from <strong>${escapeHtml(conv.mailbox_email)}</strong>
             to <strong>${escapeHtml(conv.customer_email)}</strong>
           </span>
