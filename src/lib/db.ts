@@ -9,6 +9,30 @@ export async function getMailbox(db: D1Database, email: string): Promise<Mailbox
   return db.prepare('SELECT * FROM mailboxes WHERE email = ?').bind(email).first<Mailbox>()
 }
 
+export async function getMailboxById(db: D1Database, id: number): Promise<Mailbox | null> {
+  return db.prepare('SELECT * FROM mailboxes WHERE id = ?').bind(id).first<Mailbox>()
+}
+
+export async function updateMailboxName(db: D1Database, id: number, name: string): Promise<void> {
+  await db.prepare('UPDATE mailboxes SET name = ? WHERE id = ?').bind(name, id).run()
+}
+
+export async function updateMailboxCfIds(
+  db: D1Database,
+  id: number,
+  zoneId: string,
+  ruleId: string
+): Promise<void> {
+  await db
+    .prepare('UPDATE mailboxes SET cf_zone_id = ?, cf_rule_id = ? WHERE id = ?')
+    .bind(zoneId, ruleId, id)
+    .run()
+}
+
+export async function deleteMailbox(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM mailboxes WHERE id = ?').bind(id).run()
+}
+
 export async function getConversations(
   db: D1Database,
   opts: { mailbox?: string; status?: string } = {}

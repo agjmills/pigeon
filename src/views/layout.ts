@@ -23,12 +23,22 @@ export function layout(
     ...mailboxes.map(mb => {
       const count = counts[mb.email] ?? 0
       const active = activeMailbox === mb.email
-      return `<a href="/?mailbox=${encodeURIComponent(mb.email)}"
-          hx-boost="true"
-          class="flex items-center justify-between px-3 py-2 rounded-md text-sm ${active ? 'bg-indigo-100 text-indigo-800 font-medium' : 'text-gray-600 hover:bg-gray-100'}">
-        <span class="truncate">${escapeHtml(mb.name)}</span>
-        ${count > 0 ? `<span class="ml-2 shrink-0 bg-indigo-600 text-white text-xs rounded-full px-2 py-0.5">${count}</span>` : ''}
-      </a>`
+      return `<div class="group flex items-center gap-1 rounded-md ${active ? 'bg-indigo-100' : 'hover:bg-gray-100'}">
+        <a href="/?mailbox=${encodeURIComponent(mb.email)}"
+           hx-boost="true"
+           class="flex flex-1 items-center justify-between px-3 py-2 text-sm min-w-0 ${active ? 'text-indigo-800 font-medium' : 'text-gray-600'}">
+          <span class="truncate">${escapeHtml(mb.name)}</span>
+          ${count > 0 ? `<span class="ml-2 shrink-0 bg-indigo-600 text-white text-xs rounded-full px-2 py-0.5">${count}</span>` : ''}
+        </a>
+        <a href="/mailboxes/${mb.id}/edit"
+           hx-boost="true"
+           title="Edit mailbox"
+           class="shrink-0 pr-2 text-gray-300 hover:text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+          </svg>
+        </a>
+      </div>`
     }),
   ].join('\n')
 

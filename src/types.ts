@@ -8,6 +8,7 @@ export type Bindings = {
   RESEND_API_KEY: string
   PIPE_SECRET: string
   SESSION_SECRET: string
+  CLOUDFLARE_API_TOKEN: string
 }
 
 export type Variables = {
@@ -28,6 +29,8 @@ export type Mailbox = {
   id: number
   email: string
   name: string
+  cf_zone_id: string | null
+  cf_rule_id: string | null
 }
 
 export type Conversation = {
