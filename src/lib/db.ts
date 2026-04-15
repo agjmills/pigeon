@@ -1,0 +1,159 @@
+import type { Conversation, Message, Mailbox } from '../types'
+
+export async function getMailboxes(db: D1Database): Promise<Mailbox[]> {
+  const { results } = await db.prepare('SELECT * FROM mailboxes ORDER BY name').all<Mailbox>()
+  return results
+}
+
+export async function getMailbox(db: D1Database, email: string): Promise<Mailbox | null> {
+  return db.prepare('SELECT * FROM mailboxes WHERE email = ?').bind(email).first<Mailbox>()
+}
+
+export async function getConversations(
+  db: D1Database,
+  opts: { mailbox?: string; status?: string } = {}
+): Promise<Conversation[]> {
+  let query = `
+    SELECT c.*, COUNT(m.id) as message_count
+    FROM conversations c
+    LEFT JOIN messages m ON m.conversation_id = c.id
+    WHERE 1=1
+  `
+  const bindings: string[] = []
+
+  if (opts.mailbox) {
+    query += ' AND c.mailbox_email = ?'
+    bindings.push(opts.mailbox)
+  }
+  if (opts.status) {
+    query += ' AND c.status = ?'
+    bindings.push(opts.status)
+  }
+
+  query += ' GROUP BY c.id ORDER BY c.last_message_at DESC LIMIT 100'
+
+  const stmt = db.prepare(query)
+  const { results } = await stmt.bind(...bindings).all<Conversation>()
+  return results
+}
+
+export async function getConversation(db: D1Database, id: number): Promise<Conversation | null> {
+  return db.prepare('SELECT * FROM conversations WHERE id = ?').bind(id).first<Conversation>()
+}
+
+export async function getMessages(db: D1Database, conversationId: number): Promise<Message[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC')
+    .bind(conversationId)
+    .all<Message>()
+  return results
+}
+
+export async function getLastMessageId(db: D1Database, conversationId: number): Promise<string | null> {
+  const msg = await db
+    .prepare('SELECT message_id FROM messages WHERE conversation_id = ? AND message_id IS NOT NULL ORDER BY created_at DESC LIMIT 1')
+    .bind(conversationId)
+    .first<{ message_id: string }>()
+  return msg?.message_id ?? null
+}
+
+export async function findConversationByMessageId(
+  db: D1Database,
+  messageId: string
+): Promise<Conversation | null> {
+  return db
+    .prepare('SELECT c.* FROM conversations c JOIN messages m ON m.conversation_id = c.id WHERE m.message_id = ?')
+    .bind(messageId)
+    .first<Conversation>()
+}
+
+export async function createConversation(
+  db: D1Database,
+  data: {
+    mailbox_email: string
+    subject: string
+    customer_email: string
+    customer_name?: string | null
+  }
+): Promise<number> {
+  const result = await db
+    .prepare(`
+      INSERT INTO conversations (mailbox_email, subject, customer_email, customer_name)
+      VALUES (?, ?, ?, ?)
+    `)
+    .bind(data.mailbox_email, data.subject, data.customer_email, data.customer_name ?? null)
+    .run()
+  return result.meta.last_row_id as number
+}
+
+export async function createMessage(
+  db: D1Database,
+  data: {
+    conversation_id: number
+    direction: 'inbound' | 'outbound'
+    from_email: string
+    from_name?: string | null
+    to_email: string
+    subject: string
+    body_text?: string | null
+    body_html?: string | null
+    message_id?: string | null
+    in_reply_to?: string | null
+    raw_r2_key?: string | null
+  }
+): Promise<number> {
+  const result = await db
+    .prepare(`
+      INSERT INTO messages
+        (conversation_id, direction, from_email, from_name, to_email, subject,
+         body_text, body_html, message_id, in_reply_to, raw_r2_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .bind(
+      data.conversation_id,
+      data.direction,
+      data.from_email,
+      data.from_name ?? null,
+      data.to_email,
+      data.subject,
+      data.body_text ?? null,
+      data.body_html ?? null,
+      data.message_id ?? null,
+      data.in_reply_to ?? null,
+      data.raw_r2_key ?? null
+    )
+    .run()
+
+  await db
+    .prepare('UPDATE conversations SET last_message_at = unixepoch(), updated_at = unixepoch() WHERE id = ?')
+    .bind(data.conversation_id)
+    .run()
+
+  return result.meta.last_row_id as number
+}
+
+export async function setConversationStatus(
+  db: D1Database,
+  id: number,
+  status: 'open' | 'closed'
+): Promise<void> {
+  await db
+    .prepare('UPDATE conversations SET status = ?, updated_at = unixepoch() WHERE id = ?')
+    .bind(status, id)
+    .run()
+}
+
+export async function getMailboxCounts(
+  db: D1Database
+): Promise<Record<string, number>> {
+  const { results } = await db
+    .prepare(`
+      SELECT mailbox_email, COUNT(*) as count
+      FROM conversations
+      WHERE status = 'open'
+      GROUP BY mailbox_email
+    `)
+    .all<{ mailbox_email: string; count: number }>()
+
+  return Object.fromEntries(results.map(r => [r.mailbox_email, r.count]))
+}
