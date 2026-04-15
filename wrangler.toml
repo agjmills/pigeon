@@ -1,4 +1,4 @@
-name = "courier"
+name = "pigeon"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
@@ -8,17 +8,17 @@ compatibility_flags = ["nodejs_compat"]
 #
 # [vars]
 # AUTHENTIK_URL = "https://auth.example.com"
-# AUTHENTIK_CLIENT_ID = "courier"
-# APP_URL = "https://courier.example.com"
+# AUTHENTIK_CLIENT_ID = "pigeon"
+# APP_URL = "https://pigeon.example.com"
 #
 # [[d1_databases]]
 # binding = "DB"
-# database_name = "courier"
-# database_id = ""          # wrangler d1 create courier
+# database_name = "pigeon"
+# database_id = ""          # wrangler d1 create pigeon
 #
 # [[r2_buckets]]
 # binding = "ATTACHMENTS"
-# bucket_name = "courier-attachments"
+# bucket_name = "pigeon-attachments"
 #
 # Secrets (never in toml — set via: wrangler secret put <NAME>):
 #   AUTHENTIK_CLIENT_SECRET

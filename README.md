@@ -1,4 +1,4 @@
-# Courier
+# Pigeon
 
 Self-hosted multi-domain email inbox built on Cloudflare Workers, D1, R2, and HTMX. Receive email via Cloudflare Email Routing, manage conversations in a clean web UI, reply via Resend.
 
