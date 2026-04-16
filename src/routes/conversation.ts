@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import type { AppEnv } from '../types'
 import {
-  getConversation, getMessages, getMailboxes, getMailboxCounts, getDomains,
+  getConversation, getMessages, getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
   createMessage, setConversationStatus, getLastMessageId,
   getCustomerById, linkConversationToCustomer, createCustomer,
+  markConversationRead, saveAiSummary,
 } from '../lib/db'
 import { sendReply } from '../lib/resend'
 import { layout } from '../views/layout'
@@ -15,20 +16,23 @@ conversationRoutes.get('/:id', async (c) => {
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
-  const [conv, messages, mailboxes, domains, counts] = await Promise.all([
+  const [conv, messages, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getConversation(c.env.DB, id),
     getMessages(c.env.DB, id),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
   ])
 
   if (!conv) return c.notFound()
 
+  if (conv.unread) await markConversationRead(c.env.DB, id)
+
   const customer = conv.customer_id ? await getCustomerById(c.env.DB, conv.customer_id) : null
 
   return c.html(layout(conversationView(conv, messages, customer), {
-    user, mailboxes, domains, counts,
+    user, mailboxes, domains, counts, unreadCounts,
     activeMailbox: conv.mailbox_email,
     title: conv.subject,
   }))
@@ -90,42 +94,39 @@ conversationRoutes.post('/:id/reply', async (c) => {
 
 conversationRoutes.get('/:id/summary', async (c) => {
   const id = parseInt(c.req.param('id'))
-  const [conv, messages] = await Promise.all([
-    getConversation(c.env.DB, id),
-    getMessages(c.env.DB, id),
-  ])
+  const conv = await getConversation(c.env.DB, id)
   if (!conv) return c.notFound()
 
-  const transcript = messages.map(msg => {
-    const who = msg.direction === 'outbound' ? 'Agent' : 'Customer'
-    const body = msg.body_text || (msg.body_html ?? '').replace(/<[^>]*>/g, '')
-    return `${who}: ${body.trim()}`
-  }).join('\n\n')
+  let summary = conv.ai_summary
+  if (!summary) {
+    const messages = await getMessages(c.env.DB, id)
+    const transcript = messages
+      .filter(msg => msg.direction !== 'note')
+      .map(msg => {
+        const who = msg.direction === 'outbound' ? 'Agent' : 'Customer'
+        const body = msg.body_text || (msg.body_html ?? '').replace(/<[^>]*>/g, '')
+        return `${who}: ${body.trim()}`
+      }).join('\n\n')
 
-  let summary = 'Could not generate summary.'
-  try {
-    const result = await c.env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a concise email assistant. Summarise this support conversation in 2-3 sentences: the customer\'s issue, any resolution, and current status. Be factual and brief.',
-        },
-        { role: 'user', content: transcript },
-      ],
-    }) as { response: string }
-    summary = result.response?.trim() ?? summary
-  } catch (err) {
-    console.error('AI summary error:', err)
+    summary = 'Could not generate summary.'
+    try {
+      const result = await c.env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a concise email assistant. Summarise this support conversation in 2-3 sentences: the customer\'s issue, any resolution, and current status. Be factual and brief.',
+          },
+          { role: 'user', content: transcript },
+        ],
+      }) as { response: string }
+      summary = result.response?.trim() ?? summary
+    } catch (err) {
+      console.error('AI summary error:', err)
+    }
+    await saveAiSummary(c.env.DB, id, summary)
   }
 
-  return c.html(`
-    <div id="ai-summary" class="ai-summary">
-      <div class="ai-summary-label">
-        <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" /></svg>
-        AI Summary
-      </div>
-      ${summary.replace(/\n/g, '<br>')}
-    </div>`)
+  return c.html(summaryHtml(summary))
 })
 
 conversationRoutes.post('/:id/status', async (c) => {
@@ -145,3 +146,46 @@ conversationRoutes.post('/:id/status', async (c) => {
   const customer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
   return c.html(conversationView(updatedConv!, messages, customer))
 })
+
+conversationRoutes.post('/:id/note', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.parseBody()
+  const bodyText = String(body.body_text ?? '').trim()
+  const bodyHtml = String(body.body_html ?? '').trim()
+
+  if (!bodyText && !bodyHtml) return c.text('Empty note', 400)
+
+  const conv = await getConversation(c.env.DB, id)
+  if (!conv) return c.notFound()
+
+  const user = c.get('user')
+  await createMessage(c.env.DB, {
+    conversation_id: id,
+    direction: 'note',
+    from_email: user.email,
+    from_name: user.name,
+    to_email: '',
+    subject: conv.subject,
+    body_text: bodyText || null,
+    body_html: bodyHtml || null,
+  })
+
+  const [updatedConv, messages] = await Promise.all([
+    getConversation(c.env.DB, id),
+    getMessages(c.env.DB, id),
+  ])
+
+  const customer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
+  return c.html(convBodyView(updatedConv!, messages, customer))
+})
+
+function summaryHtml(summary: string): string {
+  return `
+    <div id="ai-summary" class="ai-summary">
+      <div class="ai-summary-label">
+        <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" /></svg>
+        AI Summary
+      </div>
+      ${summary.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}
+    </div>`
+}
