@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { AppEnv } from '../types'
+import { escapeHtml } from '../views/layout'
 
 export const authRoutes = new Hono<AppEnv>()
 
@@ -37,6 +38,37 @@ async function generateToken(): Promise<string> {
   return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
+function errorPage(message: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Error — Pigeon</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; background: #f5f2ee; color: #1c1814; margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; -webkit-font-smoothing: antialiased; }
+    .card { background: #fff; border: 1px solid #dbd5cd; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,.08); padding: 32px 36px; max-width: 420px; text-align: center; }
+    h1 { font-size: 16px; font-weight: 600; color: #d03030; margin: 0 0 10px; }
+    p { font-size: 13.5px; color: #6b6560; line-height: 1.55; margin: 0 0 20px; }
+    a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; background: #c04a1e; color: #fff; text-decoration: none; transition: background 100ms; }
+    a:hover { background: #a63d18; }
+  </style>
+  <script>(function(){if(localStorage.getItem('theme')==='dark'||(!localStorage.getItem('theme')&&matchMedia('(prefers-color-scheme:dark)').matches)){var s=document.querySelector('style');s.textContent+=
+    'body{background:#131009;color:#ede7df} .card{background:#211e18;border-color:#2d2a24;box-shadow:0 4px 12px rgba(0,0,0,.3)} h1{color:#f87171} p{color:#998f86} a{background:#e0602c} a:hover{background:#cc5224}'
+  }})()</script>
+</head>
+<body>
+  <div class="card">
+    <h1>Something went wrong</h1>
+    <p>${message}</p>
+    <a href="/auth/login">Try signing in again</a>
+  </div>
+</body>
+</html>`
+}
+
 authRoutes.get('/login', async (c) => {
   const oidc = await discoverOIDC(c.env.OIDC_ISSUER)
   const { verifier, challenge } = await generatePKCE()
@@ -65,14 +97,14 @@ authRoutes.get('/login', async (c) => {
 authRoutes.get('/callback', async (c) => {
   const { code, state, error } = c.req.query()
 
-  if (error) return c.text(`Auth error: ${error}`, 400)
-  if (!code || !state) return c.text('Missing code or state', 400)
+  if (error) return c.html(errorPage(`Auth error: ${escapeHtml(error)}`), 400)
+  if (!code || !state) return c.html(errorPage('Missing code or state'), 400)
 
   const storedState = getCookie(c, 'oauth_state')
   const verifier = getCookie(c, 'pkce_verifier')
 
   if (!storedState || state !== storedState || !verifier) {
-    return c.text('Invalid state — possible CSRF', 400)
+    return c.html(errorPage('Invalid state — possible CSRF'), 400)
   }
 
   const oidc = await discoverOIDC(c.env.OIDC_ISSUER)
@@ -92,7 +124,7 @@ authRoutes.get('/callback', async (c) => {
 
   if (!tokenRes.ok) {
     const err = await tokenRes.text()
-    return c.text(`Token exchange failed: ${err}`, 500)
+    return c.html(errorPage(`Token exchange failed: ${escapeHtml(err)}`), 500)
   }
 
   const tokens = await tokenRes.json<{ access_token: string }>()
@@ -101,7 +133,7 @@ authRoutes.get('/callback', async (c) => {
     headers: { Authorization: `Bearer ${tokens.access_token}` },
   })
 
-  if (!userRes.ok) return c.text('Failed to fetch user info', 500)
+  if (!userRes.ok) return c.html(errorPage('Failed to fetch user info'), 500)
 
   const userInfo = await userRes.json<{ email: string; name: string }>()
 
