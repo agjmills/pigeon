@@ -1,100 +1,208 @@
-import type { Conversation, Message } from '../types'
+import type { Conversation, Customer, Message } from '../types'
 import { escapeHtml, formatDate } from './layout'
 
-export function conversationView(conv: Conversation, messages: Message[]): string {
+export function conversationView(conv: Conversation, messages: Message[], customer: Customer | null): string {
+  return `
+    <div id="conv-${conv.id}" style="display:flex;flex-direction:column;min-height:100%">
+      ${convHeader(conv)}
+      ${convBody(conv, messages, customer)}
+    </div>`
+}
+
+export function convBodyView(conv: Conversation, messages: Message[], customer: Customer | null): string {
+  return convBody(conv, messages, customer)
+}
+
+function convHeader(conv: Conversation): string {
+  const isOpen = conv.status === 'open'
+  return `
+    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:10">
+      <div style="min-width:0">
+        <a href="/" hx-boost="true" class="page-back" style="margin-bottom:4px">← Back</a>
+        <h2 style="font-size:15px;font-weight:600;color:var(--t1);margin:0 0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(conv.subject)}</h2>
+        <p style="font-size:12px;color:var(--t2);margin:0">
+          ${escapeHtml(conv.customer_name || conv.customer_email)}
+          <span style="color:var(--border-strong);margin:0 5px">·</span>
+          ${escapeHtml(conv.mailbox_email)}
+        </p>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <button hx-get="/c/${conv.id}/summary"
+                hx-target="#ai-summary"
+                hx-swap="outerHTML"
+                hx-indicator="#summary-spinner"
+                class="btn btn-secondary btn-sm" style="gap:5px">
+          <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+          </svg>
+          Summarise
+          <span id="summary-spinner" class="htmx-indicator">…</span>
+        </button>
+        <form method="POST" action="/c/${conv.id}/status"
+              hx-post="/c/${conv.id}/status"
+              hx-target="#conv-${conv.id}"
+              hx-swap="outerHTML">
+          <button type="submit" class="btn btn-sm ${isOpen ? 'btn-secondary' : ''}"
+                  ${!isOpen ? 'style="background:var(--success-s);color:var(--success);border-color:rgba(26,158,110,.3)"' : ''}>
+            ${isOpen ? 'Close' : 'Reopen'}
+          </button>
+        </form>
+      </div>
+    </div>`
+}
+
+function convBody(conv: Conversation, messages: Message[], customer: Customer | null): string {
   const isOpen = conv.status === 'open'
 
-  const messageThread = messages.map(msg => {
-    const isOutbound = msg.direction === 'outbound'
-    const body = msg.body_text
-      ? `<pre class="whitespace-pre-wrap font-sans text-sm text-gray-700 dark:text-gray-300 leading-relaxed">${escapeHtml(msg.body_text)}</pre>`
-      : msg.body_html
-        ? `<div class="prose prose-sm max-w-none text-sm">${msg.body_html}</div>`
-        : `<p class="text-sm text-gray-400 dark:text-gray-500 italic">No body</p>`
+  const thread = messages.map(msg => {
+    const isOut = msg.direction === 'outbound'
+    const body = renderBody(msg)
 
     return `
-      <div class="flex gap-3 ${isOutbound ? 'flex-row-reverse' : ''}">
-        <div class="w-8 h-8 rounded-full ${isOutbound ? 'bg-indigo-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'} flex items-center justify-center text-xs font-semibold shrink-0 mt-1">
-          ${isOutbound ? 'Me' : escapeHtml((msg.from_name || msg.from_email).charAt(0).toUpperCase())}
+      <div style="display:flex;gap:10px;${isOut ? 'flex-direction:row-reverse' : ''}">
+        <div class="avatar ${isOut ? 'avatar-dark' : 'avatar-warm'}" style="margin-top:2px;font-size:12px">
+          ${isOut ? 'Me' : escapeHtml((msg.from_name || msg.from_email).charAt(0).toUpperCase())}
         </div>
-        <div class="flex-1 min-w-0 max-w-2xl">
-          <div class="flex items-baseline gap-2 mb-1 ${isOutbound ? 'flex-row-reverse' : ''}">
-            <span class="text-xs font-medium text-gray-700 dark:text-gray-300">
-              ${isOutbound ? escapeHtml(msg.from_email) : escapeHtml(msg.from_name || msg.from_email)}
+        <div style="flex:1;min-width:0;max-width:580px">
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;${isOut ? 'flex-direction:row-reverse' : ''}">
+            <span style="font-size:12.5px;font-weight:500;color:var(--t1)">
+              ${isOut ? escapeHtml(msg.from_name || msg.from_email) : escapeHtml(msg.from_name || msg.from_email)}
             </span>
-            <span class="text-xs text-gray-400 dark:text-gray-500">${formatDate(msg.created_at)}</span>
+            <span style="font-size:11.5px;color:var(--t3)">${formatDate(msg.created_at)}</span>
           </div>
-          <div class="rounded-lg px-4 py-3 ${isOutbound ? 'bg-indigo-50 dark:bg-indigo-900/40 border border-indigo-100 dark:border-indigo-800' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'}">
-            ${body}
-          </div>
+          <div class="bubble ${isOut ? 'bubble-out' : 'bubble-in'}">${body}</div>
         </div>
       </div>`
   }).join('\n')
 
   return `
-    <!-- Header -->
-    <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-start justify-between gap-4 sticky top-0 z-10">
-      <div class="min-w-0">
-        <div class="flex items-center gap-2 mb-1">
-          <a href="/" hx-boost="true" class="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">← Back</a>
-        </div>
-        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100 truncate">${escapeHtml(conv.subject)}</h2>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-          ${escapeHtml(conv.customer_name || conv.customer_email)}
-          <span class="text-gray-300 dark:text-gray-600 mx-1">·</span>
-          ${escapeHtml(conv.mailbox_email)}
-        </p>
-      </div>
-      <form method="POST" action="/c/${conv.id}/status"
-            hx-post="/c/${conv.id}/status"
-            hx-target="closest div[data-conv]"
-            hx-swap="outerHTML">
-        <button type="submit"
-                class="shrink-0 px-3 py-1.5 text-xs font-medium rounded-md border ${isOpen
-                  ? 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  : 'border-green-300 dark:border-green-700 text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/30'}">
-          ${isOpen ? 'Close' : 'Reopen'}
-        </button>
-      </form>
-    </div>
-
-    <!-- Messages -->
-    <div data-conv="${conv.id}" class="px-6 py-6 space-y-6">
-      ${messageThread}
-
-      <!-- Reply form -->
+    <div data-conv="${conv.id}" style="padding:20px;display:flex;flex-direction:column;gap:20px">
+      <div id="ai-summary"></div>
+      ${customerBar(conv, customer)}
+      ${thread}
       ${isOpen ? replyForm(conv) : `
-        <div class="text-center py-6">
-          <p class="text-sm text-gray-400 dark:text-gray-500">This conversation is closed.</p>
-          <form hx-post="/c/${conv.id}/status" hx-target="closest div[data-conv]" hx-swap="outerHTML">
-            <button class="mt-2 text-sm text-indigo-600 dark:text-indigo-400 hover:underline">Reopen to reply</button>
+        <div style="text-align:center;padding:24px;color:var(--t3)">
+          <p style="font-size:13px;margin:0 0 8px">This conversation is closed.</p>
+          <form hx-post="/c/${conv.id}/status" hx-target="#conv-${conv.id}" hx-swap="outerHTML" style="display:inline">
+            <button class="btn-text">Reopen to reply</button>
           </form>
         </div>`}
     </div>`
 }
 
+function renderBody(msg: Message): string {
+  if (msg.body_html) {
+    const doc = wrapEmailHtml(msg.body_html)
+    const srcdoc = doc.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    const onload = `(function(f){var dark=document.documentElement.classList.contains('dark');var b=f.contentDocument&&f.contentDocument.body;if(b){if(dark){b.style.backgroundColor='#211e18';b.style.color='#ede7df';}f.style.height=Math.min(f.contentDocument.documentElement.scrollHeight+16,600)+'px';}  })(this)`
+    return `<iframe srcdoc="${srcdoc}" sandbox="allow-same-origin allow-popups" style="width:100%;border:0;border-radius:4px;min-height:40px;display:block" onload="${onload}"></iframe>`
+  }
+  if (msg.body_text) {
+    const cleaned = stripQuoted(msg.body_text)
+    return `<pre style="white-space:pre-wrap;font-family:inherit;font-size:13.5px;color:var(--t1);line-height:1.6;margin:0">${escapeHtml(cleaned)}</pre>`
+  }
+  return `<span style="font-size:13px;color:var(--t3);font-style:italic">No content</span>`
+}
+
+function wrapEmailHtml(html: string): string {
+  if (html.toLowerCase().includes('<html')) return html
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    body{font-family:-apple-system,system-ui,sans-serif;font-size:14px;color:#1c1814;margin:0;padding:10px;word-break:break-word;line-height:1.55}
+    a{color:#c04a1e}img{max-width:100%;height:auto}
+    blockquote{border-left:3px solid #dbd5cd;margin:8px 0;padding-left:12px;color:#6b6560}
+  </style></head><body>${html}</body></html>`
+}
+
+function stripQuoted(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('>')) continue
+    if (/^[-_]{3,}\s*$/.test(line)) break
+    if (/^On .{10,}wrote:/s.test(line)) break
+    if (/^From:\s*.+/.test(line)) {
+      const next = lines.slice(i + 1, i + 5).join('\n')
+      if (/To:\s*.+/m.test(next) && /Date:\s*.+/m.test(next)) break
+    }
+    out.push(line)
+  }
+  return out.join('\n').trim()
+}
+
+function customerBar(conv: Conversation, customer: Customer | null): string {
+  if (!customer) {
+    return `
+      <div class="customer-bar">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="flex-shrink:0;color:var(--t3)">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+          </svg>
+          <span style="color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${escapeHtml(conv.customer_name ? `${conv.customer_name} <${conv.customer_email}>` : conv.customer_email)}
+          </span>
+        </div>
+        <form method="POST" action="/customers/from-conversation/${conv.id}" style="flex-shrink:0">
+          <button type="submit" class="btn-text">Save as contact</button>
+        </form>
+      </div>`
+  }
+
+  return `
+    <div class="customer-bar">
+      <div style="display:flex;align-items:center;gap:8px;min-width:0">
+        <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="flex-shrink:0;color:var(--accent)">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+        </svg>
+        <a href="/customers/${customer.id}" hx-boost="true" style="color:var(--accent);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${escapeHtml(customer.name || customer.email)}
+        </a>
+        ${customer.notes ? `<span style="color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">— ${escapeHtml(customer.notes.split('\n')[0])}</span>` : ''}
+      </div>
+      <a href="/customers/${customer.id}" hx-boost="true" class="btn-text" style="flex-shrink:0">View contact →</a>
+    </div>`
+}
+
 function replyForm(conv: Conversation): string {
   return `
-    <div class="border-t border-gray-200 dark:border-gray-700 pt-6">
+    <div style="border-top:1px solid var(--border);padding-top:20px">
       <form hx-post="/c/${conv.id}/reply"
             hx-target="div[data-conv='${conv.id}']"
             hx-swap="outerHTML"
             hx-indicator="#reply-spinner"
-            class="space-y-3">
-        <textarea name="body"
-                  rows="5"
-                  required
-                  placeholder="Write your reply…"
-                  class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-y"></textarea>
-        <div class="flex items-center justify-between">
-          <span class="text-xs text-gray-400 dark:text-gray-500">
-            Replying from <strong>${escapeHtml(conv.mailbox_email)}</strong>
-            to <strong>${escapeHtml(conv.customer_email)}</strong>
+            onsubmit="document.getElementById('reply-body-html').value=document.getElementById('reply-editor').innerHTML;document.getElementById('reply-body-text').value=document.getElementById('reply-editor').innerText.trim()">
+
+        <div class="editor-wrap" style="margin-bottom:12px">
+          <div class="editor-toolbar">
+            <button type="button" onmousedown="event.preventDefault();document.execCommand('bold')" class="toolbar-btn" title="Bold"><strong>B</strong></button>
+            <button type="button" onmousedown="event.preventDefault();document.execCommand('italic')" class="toolbar-btn" title="Italic"><em>I</em></button>
+            <button type="button" onmousedown="event.preventDefault();document.execCommand('underline')" class="toolbar-btn" title="Underline" style="text-decoration:underline">U</button>
+            <span class="editor-divider"></span>
+            <button type="button" onmousedown="event.preventDefault();(function(){var u=prompt('URL:');if(u)document.execCommand('createLink',false,u)})()" class="toolbar-btn" title="Link">
+              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" /></svg>
+            </button>
+            <button type="button" onmousedown="event.preventDefault();document.execCommand('removeFormat')" class="toolbar-btn" title="Clear formatting">
+              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 17.94 6M3.75 9h11.25M5.25 15h8.25" /></svg>
+            </button>
+          </div>
+          <div contenteditable="true"
+               id="reply-editor"
+               data-placeholder="Write your reply…"
+               class="editor-body">
+          </div>
+        </div>
+
+        <input type="hidden" name="body_html" id="reply-body-html">
+        <input type="hidden" name="body_text" id="reply-body-text">
+
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:12px;color:var(--t3)">
+            From <strong style="color:var(--t2)">${escapeHtml(conv.mailbox_email)}</strong>
+            to <strong style="color:var(--t2)">${escapeHtml(conv.customer_email)}</strong>
           </span>
-          <button type="submit"
-                  class="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-            <span>Send reply</span>
-            <span id="reply-spinner" class="htmx-indicator text-xs opacity-70">sending…</span>
+          <button type="submit" class="btn btn-primary btn-sm" style="gap:6px">
+            Send reply
+            <span id="reply-spinner" class="htmx-indicator">…</span>
           </button>
         </div>
       </form>

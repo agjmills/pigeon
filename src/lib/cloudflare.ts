@@ -33,8 +33,8 @@ export async function createDnsRecord(
   token: string,
   zoneId: string,
   record: { type: string; name: string; content: string; ttl?: number; priority?: number }
-): Promise<void> {
-  await cfFetch(token, `/zones/${zoneId}/dns_records`, {
+): Promise<string> {
+  const result = await cfFetch<{ id: string }>(token, `/zones/${zoneId}/dns_records`, {
     method: 'POST',
     body: JSON.stringify({
       type: record.type,
@@ -44,6 +44,29 @@ export async function createDnsRecord(
       ...(record.priority !== undefined ? { priority: record.priority } : {}),
     }),
   })
+  return result.id
+}
+
+export async function deleteDnsRecord(token: string, zoneId: string, recordId: string): Promise<void> {
+  await cfFetch(token, `/zones/${zoneId}/dns_records/${recordId}`, { method: 'DELETE' })
+}
+
+export async function createCatchallRule(token: string, zoneId: string, workerName: string): Promise<string> {
+  const rule = await cfFetch<{ id: string }>(
+    token,
+    `/zones/${zoneId}/email/routing/rules`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'catch-all',
+        enabled: true,
+        matchers: [{ type: 'all' }],
+        actions: [{ type: 'worker', value: [workerName] }],
+        priority: 0,
+      }),
+    }
+  )
+  return rule.id
 }
 
 export async function createRoutingRule(

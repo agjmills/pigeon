@@ -1,3 +1,25 @@
+export async function verifyResendDomain(apiKey: string, resendDomainId: string): Promise<boolean> {
+  const res = await fetch(`https://api.resend.com/domains/${resendDomainId}/verify`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+  })
+  if (!res.ok) return false
+  // Fetch updated status
+  const detailRes = await fetch(`https://api.resend.com/domains/${resendDomainId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  })
+  if (!detailRes.ok) return false
+  const detail = await detailRes.json<{ status: string }>()
+  return detail.status === 'verified'
+}
+
+export async function deleteResendDomain(apiKey: string, resendDomainId: string): Promise<void> {
+  await fetch(`https://api.resend.com/domains/${resendDomainId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${apiKey}` },
+  })
+}
+
 type ResendDnsRecord = {
   record: string
   name: string
@@ -56,6 +78,7 @@ export async function sendReply(opts: {
   to: string
   subject: string
   text: string
+  html?: string | null
   inReplyTo?: string | null
   references?: string | null
 }): Promise<{ messageId: string }> {
@@ -64,13 +87,16 @@ export async function sendReply(opts: {
     'Content-Type': 'application/json',
   }
 
+  const isReply = !!opts.inReplyTo
   const payload: Record<string, unknown> = {
     from: `${opts.fromName} <${opts.from}>`,
     to: [opts.to],
-    subject: opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`,
+    subject: isReply ? (opts.subject.startsWith('Re:') ? opts.subject : `Re: ${opts.subject}`) : opts.subject,
     text: opts.text,
     headers: {} as Record<string, string>,
   }
+
+  if (opts.html) payload.html = opts.html
 
   if (opts.inReplyTo) {
     (payload.headers as Record<string, string>)['In-Reply-To'] = opts.inReplyTo

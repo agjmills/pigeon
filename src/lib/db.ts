@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -27,6 +27,26 @@ export async function updateDomainCf(db: D1Database, id: number, zoneId: string)
 
 export async function updateDomainResend(db: D1Database, id: number, resendDomainId: string): Promise<void> {
   await db.prepare('UPDATE domains SET resend_domain_id = ? WHERE id = ?').bind(resendDomainId, id).run()
+}
+
+export async function updateDomainDnsRecordIds(db: D1Database, id: number, recordIds: string[]): Promise<void> {
+  await db.prepare('UPDATE domains SET cf_dns_record_ids = ? WHERE id = ?').bind(JSON.stringify(recordIds), id).run()
+}
+
+export async function updateDomainResendVerified(db: D1Database, id: number, verified: boolean): Promise<void> {
+  await db.prepare('UPDATE domains SET resend_verified = ? WHERE id = ?').bind(verified ? 1 : 0, id).run()
+}
+
+export async function updateDomainCatchallMailbox(db: D1Database, id: number, email: string | null): Promise<void> {
+  await db.prepare('UPDATE domains SET catchall_mailbox_email = ? WHERE id = ?').bind(email, id).run()
+}
+
+export async function updateDomainCatchallRule(db: D1Database, id: number, ruleId: string | null): Promise<void> {
+  await db.prepare('UPDATE domains SET cf_catchall_rule_id = ? WHERE id = ?').bind(ruleId, id).run()
+}
+
+export async function getDomainById(db: D1Database, id: number): Promise<Domain | null> {
+  return db.prepare('SELECT * FROM domains WHERE id = ?').bind(id).first<Domain>()
 }
 
 export async function deleteDomain(db: D1Database, id: number): Promise<void> {
@@ -69,6 +89,10 @@ export async function createMailbox(
 
 export async function updateMailboxName(db: D1Database, id: number, name: string): Promise<void> {
   await db.prepare('UPDATE mailboxes SET name = ? WHERE id = ?').bind(name, id).run()
+}
+
+export async function updateMailboxSenderName(db: D1Database, id: number, senderName: string | null): Promise<void> {
+  await db.prepare('UPDATE mailboxes SET sender_name = ? WHERE id = ?').bind(senderName, id).run()
 }
 
 export async function updateMailboxCfRuleId(db: D1Database, id: number, ruleId: string): Promise<void> {
@@ -127,6 +151,32 @@ export async function getLastMessageId(db: D1Database, conversationId: number): 
     .bind(conversationId)
     .first<{ message_id: string }>()
   return msg?.message_id ?? null
+}
+
+export async function findOpenConversationBySubject(
+  db: D1Database,
+  mailboxEmail: string,
+  customerEmail: string,
+  baseSubject: string
+): Promise<Conversation | null> {
+  return db
+    .prepare(`
+      SELECT * FROM conversations
+      WHERE mailbox_email = ?
+        AND customer_email = ?
+        AND status = 'open'
+        AND (subject = ? OR subject = ? OR subject LIKE ?)
+      ORDER BY last_message_at DESC
+      LIMIT 1
+    `)
+    .bind(
+      mailboxEmail,
+      customerEmail,
+      baseSubject,
+      `Re: ${baseSubject}`,
+      `Re:%${baseSubject}`
+    )
+    .first<Conversation>()
 }
 
 export async function findConversationByMessageId(
@@ -204,6 +254,10 @@ export async function createMessage(
   return result.meta.last_row_id as number
 }
 
+export async function linkConversationToCustomer(db: D1Database, conversationId: number, customerId: number): Promise<void> {
+  await db.prepare('UPDATE conversations SET customer_id = ? WHERE id = ?').bind(customerId, conversationId).run()
+}
+
 export async function setConversationStatus(
   db: D1Database,
   id: number,
@@ -213,6 +267,51 @@ export async function setConversationStatus(
     .prepare('UPDATE conversations SET status = ?, updated_at = unixepoch() WHERE id = ?')
     .bind(status, id)
     .run()
+}
+
+// ── Customers ─────────────────────────────────────────────────────────────────
+
+export async function getAllCustomers(db: D1Database): Promise<Customer[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM customers ORDER BY name ASC, email ASC')
+    .all<Customer>()
+  return results
+}
+
+export async function getCustomerByEmail(db: D1Database, email: string): Promise<Customer | null> {
+  return db.prepare('SELECT * FROM customers WHERE email = ?').bind(email).first<Customer>()
+}
+
+export async function getCustomerById(db: D1Database, id: number): Promise<Customer | null> {
+  return db.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first<Customer>()
+}
+
+export async function createCustomer(db: D1Database, data: { email: string; name?: string | null }): Promise<number> {
+  const result = await db
+    .prepare('INSERT OR IGNORE INTO customers (email, name) VALUES (?, ?)')
+    .bind(data.email, data.name ?? null)
+    .run()
+  if (result.meta.last_row_id) return result.meta.last_row_id as number
+  const existing = await getCustomerByEmail(db, data.email)
+  return existing!.id
+}
+
+export async function updateCustomer(db: D1Database, id: number, data: { name?: string; notes?: string }): Promise<void> {
+  const fields: string[] = []
+  const values: (string | number)[] = []
+  if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name) }
+  if (data.notes !== undefined) { fields.push('notes = ?'); values.push(data.notes) }
+  if (!fields.length) return
+  fields.push('updated_at = unixepoch()')
+  await db.prepare(`UPDATE customers SET ${fields.join(', ')} WHERE id = ?`).bind(...values, id).run()
+}
+
+export async function getConversationsByCustomer(db: D1Database, customerId: number): Promise<Conversation[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM conversations WHERE customer_id = ? ORDER BY last_message_at DESC')
+    .bind(customerId)
+    .all<Conversation>()
+  return results
 }
 
 export async function getMailboxCounts(

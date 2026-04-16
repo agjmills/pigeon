@@ -1,6 +1,7 @@
 export type Bindings = {
   DB: D1Database
   ATTACHMENTS: R2Bucket
+  AI: Ai
   OIDC_ISSUER: string
   OIDC_CLIENT_ID: string
   OIDC_CLIENT_SECRET: string
@@ -29,8 +30,11 @@ export type Domain = {
   id: number
   domain: string
   cf_zone_id: string | null
+  cf_catchall_rule_id: string | null
+  cf_dns_record_ids: string | null
   resend_domain_id: string | null
   resend_verified: number
+  catchall_mailbox_email: string | null
   created_at: number
 }
 
@@ -38,6 +42,7 @@ export type Mailbox = {
   id: number
   email: string
   name: string
+  sender_name: string | null
   domain_id: number | null
   cf_rule_id: string | null
 }
@@ -48,11 +53,21 @@ export type Conversation = {
   subject: string
   customer_email: string
   customer_name: string | null
+  customer_id: number | null
   status: 'open' | 'closed'
   created_at: number
   updated_at: number
   last_message_at: number
   message_count?: number
+}
+
+export type Customer = {
+  id: number
+  email: string
+  name: string | null
+  notes: string | null
+  created_at: number
+  updated_at: number
 }
 
 export type Message = {

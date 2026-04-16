@@ -3,6 +3,7 @@ import type { AppEnv, Bindings } from './types'
 import { authRoutes } from './routes/auth'
 import { inboxRoutes } from './routes/inbox'
 import { conversationRoutes } from './routes/conversation'
+import { customerRoutes } from './routes/customers'
 import { authMiddleware } from './middleware/auth'
 import { emailHandler } from './email-handler'
 
@@ -15,6 +16,7 @@ app.route('/auth', authRoutes)
 app.use('/*', authMiddleware)
 app.route('/', inboxRoutes)
 app.route('/c', conversationRoutes)
+app.route('/customers', customerRoutes)
 
 export default {
   fetch: app.fetch,

@@ -1,6 +1,6 @@
 import PostalMime from 'postal-mime'
 import type { Bindings } from './types'
-import { getMailbox, findConversationByMessageId, createConversation, createMessage } from './lib/db'
+import { getMailbox, getDomainByName, findConversationByMessageId, findOpenConversationBySubject, createConversation, createMessage } from './lib/db'
 
 export async function emailHandler(
   message: ForwardableEmailMessage,
@@ -23,25 +23,58 @@ export async function emailHandler(
   const messageId = parsed.messageId ?? null
   const inReplyTo = parsed.inReplyTo ?? null
 
-  // Check if this mailbox is configured
-  const mailbox = await getMailbox(env.DB, toEmail)
+  // Check if this mailbox is configured; fall back to domain catch-all mailbox
+  let mailbox = await getMailbox(env.DB, toEmail)
+  let effectiveMailboxEmail = toEmail
+
   if (!mailbox) {
-    console.warn(`Courier: no mailbox configured for ${toEmail}, discarding`)
+    const domainPart = toEmail.split('@')[1]
+    if (domainPart) {
+      const domain = await getDomainByName(env.DB, domainPart)
+      if (domain?.catchall_mailbox_email) {
+        mailbox = await getMailbox(env.DB, domain.catchall_mailbox_email)
+        if (mailbox) effectiveMailboxEmail = domain.catchall_mailbox_email
+      }
+    }
+  }
+
+  if (!mailbox) {
+    console.warn(`No mailbox configured for ${toEmail} and no catch-all set, discarding`)
     return
   }
 
-  // Thread: look for an existing conversation via In-Reply-To
+  // Thread: look for an existing conversation via In-Reply-To header
   let conversationId: number | null = null
   if (inReplyTo) {
     const existing = await findConversationByMessageId(env.DB, inReplyTo)
     if (existing) conversationId = existing.id
   }
 
+  // Also check References header as fallback
+  if (!conversationId && parsed.references) {
+    const refs = parsed.references.trim().split(/\s+/)
+    for (const ref of refs.reverse()) {
+      const existing = await findConversationByMessageId(env.DB, ref)
+      if (existing) { conversationId = existing.id; break }
+    }
+  }
+
+  // Subject-based threading fallback: Re: subject from same customer to same mailbox
+  if (!conversationId && subject.toLowerCase().startsWith('re:')) {
+    const baseSubject = subject.replace(/^(re:\s*)+/i, '').trim()
+    const existing = await findOpenConversationBySubject(env.DB, effectiveMailboxEmail, fromEmail, baseSubject)
+    if (existing) conversationId = existing.id
+  }
+
   // New conversation
   if (!conversationId) {
+    // For catch-all: include original address in subject so it's visible
+    const displaySubject = effectiveMailboxEmail !== toEmail
+      ? `[→ ${toEmail}] ${subject}`
+      : subject
     conversationId = await createConversation(env.DB, {
-      mailbox_email: toEmail,
-      subject,
+      mailbox_email: effectiveMailboxEmail,
+      subject: displaySubject,
       customer_email: fromEmail,
       customer_name: fromName,
     })
@@ -52,7 +85,7 @@ export async function emailHandler(
     direction: 'inbound',
     from_email: fromEmail,
     from_name: fromName,
-    to_email: toEmail,
+    to_email: toEmail,        // preserve original recipient
     subject,
     body_text: parsed.text ?? null,
     body_html: parsed.html ?? null,
