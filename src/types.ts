@@ -55,6 +55,8 @@ export type Conversation = {
   customer_name: string | null
   customer_id: number | null
   status: 'open' | 'closed'
+  ai_summary: string | null
+  unread: number
   created_at: number
   updated_at: number
   last_message_at: number
@@ -73,7 +75,7 @@ export type Customer = {
 export type Message = {
   id: number
   conversation_id: number
-  direction: 'inbound' | 'outbound'
+  direction: 'inbound' | 'outbound' | 'note'
   from_email: string
   from_name: string | null
   to_email: string
