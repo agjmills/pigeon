@@ -29,8 +29,21 @@ export async function getZoneId(token: string, domain: string): Promise<string> 
   return zones[0].id
 }
 
-export async function enableEmailRouting(token: string, zoneId: string): Promise<void> {
-  await cfFetch(token, `/zones/${zoneId}/email/routing/enable`, { method: 'POST' })
+export async function createDnsRecord(
+  token: string,
+  zoneId: string,
+  record: { type: string; name: string; content: string; ttl?: number; priority?: number }
+): Promise<void> {
+  await cfFetch(token, `/zones/${zoneId}/dns_records`, {
+    method: 'POST',
+    body: JSON.stringify({
+      type: record.type,
+      name: record.name,
+      content: record.content,
+      ttl: record.ttl ?? 1,
+      ...(record.priority !== undefined ? { priority: record.priority } : {}),
+    }),
+  })
 }
 
 export async function createRoutingRule(

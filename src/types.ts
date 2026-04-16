@@ -25,11 +25,20 @@ export type SessionUser = {
   name: string
 }
 
+export type Domain = {
+  id: number
+  domain: string
+  cf_zone_id: string | null
+  resend_domain_id: string | null
+  resend_verified: number
+  created_at: number
+}
+
 export type Mailbox = {
   id: number
   email: string
   name: string
-  cf_zone_id: string | null
+  domain_id: number | null
   cf_rule_id: string | null
 }
 

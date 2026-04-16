@@ -2,11 +2,16 @@ import { Hono } from 'hono'
 import type { AppEnv } from '../types'
 import {
   getMailboxes, getConversations, getMailboxCounts,
-  getMailboxById, updateMailboxName, updateMailboxCfIds, deleteMailbox,
+  getMailboxById, updateMailboxName, deleteMailbox,
+  getDomains, getDomainByName, createDomain,
+  updateDomainCf, updateDomainResend,
+  createMailbox, updateMailboxCfRuleId, getMailboxesByDomain,
+  deleteDomain,
 } from '../lib/db'
 import {
-  getZoneId, enableEmailRouting, createRoutingRule, deleteRoutingRule,
+  getZoneId, createDnsRecord, createRoutingRule, deleteRoutingRule,
 } from '../lib/cloudflare'
+import { setupResendDomain } from '../lib/resend'
 import { layout, escapeHtml } from '../views/layout'
 import { inboxView } from '../views/inbox'
 
@@ -27,7 +32,7 @@ inboxRoutes.get('/', async (c) => {
   return c.html(layout(content, { user, mailboxes, counts, activeMailbox: mailbox }))
 })
 
-// ── Add mailbox ──────────────────────────────────────────────────────────────
+// ── Add mailbox ───────────────────────────────────────────────────────────────
 
 inboxRoutes.get('/mailboxes/new', async (c) => {
   const user = c.get('user')
@@ -45,37 +50,77 @@ inboxRoutes.post('/mailboxes', async (c) => {
 
   if (!email || !name) return c.text('Missing fields', 400)
 
-  const result = await c.env.DB
-    .prepare('INSERT OR IGNORE INTO mailboxes (email, name) VALUES (?, ?)')
-    .bind(email, name)
-    .run()
+  const domainName = email.split('@')[1]
+  if (!domainName) return c.text('Invalid email', 400)
 
-  const mailboxId = result.meta.last_row_id as number
-
-  // Auto-configure Cloudflare Email Routing
+  const user = c.get('user')
   let cfError: string | null = null
-  try {
-    const domain = email.split('@')[1]
-    console.log('CF_EMAIL_TOKEN length:', c.env.CF_EMAIL_TOKEN?.length, 'first4:', c.env.CF_EMAIL_TOKEN?.slice(0, 4))
-    const zoneId = await getZoneId(c.env.CF_EMAIL_TOKEN, domain)
-    await enableEmailRouting(c.env.CF_EMAIL_TOKEN, zoneId)
-    const ruleId = await createRoutingRule(
-      c.env.CF_EMAIL_TOKEN, zoneId, email, 'pigeon'
-    )
-    await updateMailboxCfIds(c.env.DB, mailboxId, zoneId, ruleId)
-  } catch (err) {
-    cfError = err instanceof Error ? err.message : String(err)
-    console.error('CF routing setup failed:', cfError)
+
+  // Step 1: ensure domain record exists
+  const domainId = await createDomain(c.env.DB, domainName)
+  let domain = await getDomainByName(c.env.DB, domainName)
+
+  // Step 2: ensure domain has CF zone ID
+  if (!domain!.cf_zone_id) {
+    try {
+      const zoneId = await getZoneId(c.env.CF_EMAIL_TOKEN, domainName)
+      await updateDomainCf(c.env.DB, domainId, zoneId)
+      domain = await getDomainByName(c.env.DB, domainName)
+    } catch (err) {
+      cfError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  // Step 3: ensure Resend domain is set up + DNS records added to CF
+  if (!cfError && !domain!.resend_domain_id) {
+    try {
+      const { id: resendDomainId, records } = await setupResendDomain(c.env.RESEND_API_KEY, domainName)
+      await updateDomainResend(c.env.DB, domainId, resendDomainId)
+
+      // Add DNS records to Cloudflare automatically
+      const zoneId = domain!.cf_zone_id!
+      const dnsErrors: string[] = []
+      for (const rec of records) {
+        if (rec.record === 'DKIM' || rec.record === 'SPF') {
+          try {
+            await createDnsRecord(c.env.CF_EMAIL_TOKEN, zoneId, {
+              type: rec.type,
+              name: rec.name,
+              content: rec.value,
+              ...(rec.priority !== undefined ? { priority: rec.priority } : {}),
+            })
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            if (!msg.includes('already exists')) dnsErrors.push(`${rec.name}: ${msg}`)
+          }
+        }
+      }
+      if (dnsErrors.length) throw new Error(`DNS record errors: ${dnsErrors.join('; ')}`)
+    } catch (err) {
+      cfError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  // Step 4: create mailbox in DB
+  const mailboxId = await createMailbox(c.env.DB, { email, name, domain_id: domainId })
+
+  // Step 5: create CF routing rule
+  if (!cfError && domain!.cf_zone_id) {
+    try {
+      const ruleId = await createRoutingRule(c.env.CF_EMAIL_TOKEN, domain!.cf_zone_id, email, 'pigeon')
+      await updateMailboxCfRuleId(c.env.DB, mailboxId, ruleId)
+    } catch (err) {
+      cfError = err instanceof Error ? err.message : String(err)
+    }
   }
 
   if (cfError) {
-    const user = c.get('user')
     const [mailboxes, counts] = await Promise.all([
       getMailboxes(c.env.DB),
       getMailboxCounts(c.env.DB),
     ])
     return c.html(layout(
-      mailboxForm({ error: `Mailbox saved but Cloudflare routing setup failed: ${cfError}`, email, name }),
+      mailboxForm({ error: `Mailbox saved but setup failed: ${cfError}`, email, name }),
       { user, mailboxes, counts, title: 'Add mailbox' }
     ))
   }
@@ -83,7 +128,7 @@ inboxRoutes.post('/mailboxes', async (c) => {
   return c.redirect('/')
 })
 
-// ── Edit mailbox ─────────────────────────────────────────────────────────────
+// ── Edit mailbox ──────────────────────────────────────────────────────────────
 
 inboxRoutes.get('/mailboxes/:id/edit', async (c) => {
   const id = parseInt(c.req.param('id'))
@@ -122,17 +167,29 @@ inboxRoutes.post('/mailboxes/:id/delete', async (c) => {
   const mailbox = await getMailboxById(c.env.DB, id)
   if (!mailbox) return c.notFound()
 
-  if (mailbox.cf_zone_id && mailbox.cf_rule_id) {
-    try {
-      await deleteRoutingRule(
-        c.env.CF_EMAIL_TOKEN, mailbox.cf_zone_id, mailbox.cf_rule_id
-      )
-    } catch (err) {
-      console.error('Failed to delete CF routing rule:', err)
+  // Delete CF routing rule
+  if (mailbox.cf_rule_id && mailbox.domain_id) {
+    const domains = await getDomains(c.env.DB)
+    const domain = domains.find(d => d.id === mailbox.domain_id)
+    if (domain?.cf_zone_id) {
+      try {
+        await deleteRoutingRule(c.env.CF_EMAIL_TOKEN, domain.cf_zone_id, mailbox.cf_rule_id)
+      } catch (err) {
+        console.error('Failed to delete CF routing rule:', err)
+      }
     }
   }
 
   await deleteMailbox(c.env.DB, id)
+
+  // Clean up domain if no mailboxes remain
+  if (mailbox.domain_id) {
+    const remaining = await getMailboxesByDomain(c.env.DB, mailbox.domain_id)
+    if (remaining.length === 0) {
+      await deleteDomain(c.env.DB, mailbox.domain_id)
+    }
+  }
+
   return c.redirect('/')
 })
 
@@ -147,13 +204,13 @@ function mailboxForm(opts: { error?: string; email?: string; name?: string } = {
         <div>
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Email address</label>
           <input type="email" name="email" required value="${escapeHtml(opts.email ?? '')}"
-                 placeholder="support@cleargym.uk"
+                 placeholder="support@example.com"
                  class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <div>
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Display name</label>
           <input type="text" name="name" required value="${escapeHtml(opts.name ?? '')}"
-                 placeholder="ClearGym Support"
+                 placeholder="Acme Support"
                  class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
         </div>
         <button type="submit"
@@ -162,7 +219,7 @@ function mailboxForm(opts: { error?: string; email?: string; name?: string } = {
         </button>
       </form>
       <p class="mt-3 text-xs text-gray-400 dark:text-gray-500">
-        Cloudflare Email Routing will be configured automatically.
+        Cloudflare Email Routing and Resend will be configured automatically.
       </p>
     </div>`
 }

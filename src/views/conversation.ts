@@ -77,7 +77,7 @@ function replyForm(conv: Conversation): string {
   return `
     <div class="border-t border-gray-200 dark:border-gray-700 pt-6">
       <form hx-post="/c/${conv.id}/reply"
-            hx-target="div[data-conv=${conv.id}]"
+            hx-target="div[data-conv='${conv.id}']"
             hx-swap="outerHTML"
             hx-indicator="#reply-spinner"
             class="space-y-3">

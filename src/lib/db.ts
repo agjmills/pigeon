@@ -1,4 +1,39 @@
-import type { Conversation, Message, Mailbox } from '../types'
+import type { Conversation, Message, Mailbox, Domain } from '../types'
+
+// ── Domains ───────────────────────────────────────────────────────────────────
+
+export async function getDomains(db: D1Database): Promise<Domain[]> {
+  const { results } = await db.prepare('SELECT * FROM domains ORDER BY domain').all<Domain>()
+  return results
+}
+
+export async function getDomainByName(db: D1Database, domain: string): Promise<Domain | null> {
+  return db.prepare('SELECT * FROM domains WHERE domain = ?').bind(domain).first<Domain>()
+}
+
+export async function createDomain(db: D1Database, domain: string): Promise<number> {
+  const result = await db
+    .prepare('INSERT OR IGNORE INTO domains (domain) VALUES (?)')
+    .bind(domain)
+    .run()
+  if (result.meta.last_row_id) return result.meta.last_row_id as number
+  const existing = await getDomainByName(db, domain)
+  return existing!.id
+}
+
+export async function updateDomainCf(db: D1Database, id: number, zoneId: string): Promise<void> {
+  await db.prepare('UPDATE domains SET cf_zone_id = ? WHERE id = ?').bind(zoneId, id).run()
+}
+
+export async function updateDomainResend(db: D1Database, id: number, resendDomainId: string): Promise<void> {
+  await db.prepare('UPDATE domains SET resend_domain_id = ? WHERE id = ?').bind(resendDomainId, id).run()
+}
+
+export async function deleteDomain(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM domains WHERE id = ?').bind(id).run()
+}
+
+// ── Mailboxes ─────────────────────────────────────────────────────────────────
 
 export async function getMailboxes(db: D1Database): Promise<Mailbox[]> {
   const { results } = await db.prepare('SELECT * FROM mailboxes ORDER BY name').all<Mailbox>()
@@ -13,25 +48,38 @@ export async function getMailboxById(db: D1Database, id: number): Promise<Mailbo
   return db.prepare('SELECT * FROM mailboxes WHERE id = ?').bind(id).first<Mailbox>()
 }
 
+export async function getMailboxesByDomain(db: D1Database, domainId: number): Promise<Mailbox[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM mailboxes WHERE domain_id = ? ORDER BY email')
+    .bind(domainId)
+    .all<Mailbox>()
+  return results
+}
+
+export async function createMailbox(
+  db: D1Database,
+  data: { email: string; name: string; domain_id: number }
+): Promise<number> {
+  const result = await db
+    .prepare('INSERT OR IGNORE INTO mailboxes (email, name, domain_id) VALUES (?, ?, ?)')
+    .bind(data.email, data.name, data.domain_id)
+    .run()
+  return result.meta.last_row_id as number
+}
+
 export async function updateMailboxName(db: D1Database, id: number, name: string): Promise<void> {
   await db.prepare('UPDATE mailboxes SET name = ? WHERE id = ?').bind(name, id).run()
 }
 
-export async function updateMailboxCfIds(
-  db: D1Database,
-  id: number,
-  zoneId: string,
-  ruleId: string
-): Promise<void> {
-  await db
-    .prepare('UPDATE mailboxes SET cf_zone_id = ?, cf_rule_id = ? WHERE id = ?')
-    .bind(zoneId, ruleId, id)
-    .run()
+export async function updateMailboxCfRuleId(db: D1Database, id: number, ruleId: string): Promise<void> {
+  await db.prepare('UPDATE mailboxes SET cf_rule_id = ? WHERE id = ?').bind(ruleId, id).run()
 }
 
 export async function deleteMailbox(db: D1Database, id: number): Promise<void> {
   await db.prepare('DELETE FROM mailboxes WHERE id = ?').bind(id).run()
 }
+
+// ── Conversations ─────────────────────────────────────────────────────────────
 
 export async function getConversations(
   db: D1Database,
