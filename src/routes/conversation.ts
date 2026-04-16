@@ -110,7 +110,7 @@ conversationRoutes.get('/:id/summary', async (c) => {
 
     summary = 'Could not generate summary.'
     try {
-      const result = await c.env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+      const result = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct-fp8', {
         messages: [
           {
             role: 'system',
