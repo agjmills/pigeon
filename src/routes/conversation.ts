@@ -99,12 +99,12 @@ conversationRoutes.get('/:id/summary', async (c) => {
   const transcript = messages.map(msg => {
     const who = msg.direction === 'outbound' ? 'Agent' : 'Customer'
     const body = msg.body_text || (msg.body_html ?? '').replace(/<[^>]*>/g, '')
-    return `${who}: ${body.trim().slice(0, 800)}`
+    return `${who}: ${body.trim()}`
   }).join('\n\n')
 
   let summary = 'Could not generate summary.'
   try {
-    const result = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+    const result = await c.env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
       messages: [
         {
           role: 'system',
