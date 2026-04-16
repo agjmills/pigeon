@@ -94,7 +94,7 @@ function renderBody(msg: Message): string {
   if (msg.body_html) {
     const doc = wrapEmailHtml(msg.body_html)
     const srcdoc = doc.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-    const onload = `(function(f){var dark=document.documentElement.classList.contains('dark');var b=f.contentDocument&&f.contentDocument.body;if(b){if(dark){b.style.backgroundColor='#211e18';b.style.color='#ede7df';}f.style.height=Math.min(f.contentDocument.documentElement.scrollHeight+16,600)+'px';}  })(this)`
+    const onload = `(function(f){var dark=document.documentElement.classList.contains('dark');var d=f.contentDocument;var b=d&&d.body;if(b){if(dark){b.style.backgroundColor='#211e18';b.style.color='#ede7df';var links=b.querySelectorAll('a');for(var i=0;i<links.length;i++)links[i].style.color='#f09070';var bqs=b.querySelectorAll('blockquote');for(var j=0;j<bqs.length;j++){bqs[j].style.borderLeftColor='#3d3a33';bqs[j].style.color='#998f86';}}f.style.height=Math.min(d.documentElement.scrollHeight+16,600)+'px';}})(this)`
     return `<iframe srcdoc="${srcdoc}" sandbox="allow-same-origin allow-popups" style="width:100%;border:0;border-radius:4px;min-height:40px;display:block" onload="${onload}"></iframe>`
   }
   if (msg.body_text) {
