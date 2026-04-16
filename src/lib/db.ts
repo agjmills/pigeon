@@ -212,7 +212,7 @@ export async function createMessage(
   db: D1Database,
   data: {
     conversation_id: number
-    direction: 'inbound' | 'outbound'
+    direction: 'inbound' | 'outbound' | 'note'
     from_email: string
     from_name?: string | null
     to_email: string
@@ -247,7 +247,7 @@ export async function createMessage(
     .run()
 
   await db
-    .prepare('UPDATE conversations SET last_message_at = unixepoch(), updated_at = unixepoch() WHERE id = ?')
+    .prepare('UPDATE conversations SET last_message_at = unixepoch(), updated_at = unixepoch(), ai_summary = NULL WHERE id = ?')
     .bind(data.conversation_id)
     .run()
 
@@ -327,4 +327,31 @@ export async function getMailboxCounts(
     .all<{ mailbox_email: string; count: number }>()
 
   return Object.fromEntries(results.map(r => [r.mailbox_email, r.count]))
+}
+
+export async function getUnreadCounts(
+  db: D1Database
+): Promise<Record<string, number>> {
+  const { results } = await db
+    .prepare(`
+      SELECT mailbox_email, COUNT(*) as count
+      FROM conversations
+      WHERE unread = 1
+      GROUP BY mailbox_email
+    `)
+    .all<{ mailbox_email: string; count: number }>()
+
+  return Object.fromEntries(results.map(r => [r.mailbox_email, r.count]))
+}
+
+export async function markConversationRead(db: D1Database, id: number): Promise<void> {
+  await db.prepare('UPDATE conversations SET unread = 0 WHERE id = ?').bind(id).run()
+}
+
+export async function markConversationUnread(db: D1Database, id: number): Promise<void> {
+  await db.prepare('UPDATE conversations SET unread = 1 WHERE id = ?').bind(id).run()
+}
+
+export async function saveAiSummary(db: D1Database, id: number, summary: string): Promise<void> {
+  await db.prepare('UPDATE conversations SET ai_summary = ? WHERE id = ?').bind(summary, id).run()
 }
