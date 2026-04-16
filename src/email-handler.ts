@@ -1,6 +1,6 @@
 import PostalMime from 'postal-mime'
 import type { Bindings } from './types'
-import { getMailbox, getDomainByName, findConversationByMessageId, findOpenConversationBySubject, createConversation, createMessage } from './lib/db'
+import { getMailbox, getDomainByName, findConversationByMessageId, findOpenConversationBySubject, createConversation, createMessage, markConversationUnread } from './lib/db'
 
 export async function emailHandler(
   message: ForwardableEmailMessage,
@@ -93,6 +93,8 @@ export async function emailHandler(
     in_reply_to: inReplyTo,
     raw_r2_key: r2Key,
   })
+
+  await markConversationUnread(env.DB, conversationId)
 }
 
 async function streamToBuffer(stream: ReadableStream): Promise<ArrayBuffer> {

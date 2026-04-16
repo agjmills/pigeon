@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { AppEnv, Domain } from '../types'
 import {
-  getMailboxes, getConversations, getMailboxCounts,
+  getMailboxes, getConversations, getMailboxCounts, getUnreadCounts,
   getMailboxById, updateMailboxName, deleteMailbox,
   getDomains, getDomainByName, getDomainById, createDomain,
   updateDomainCf, updateDomainResend, updateDomainDnsRecordIds, updateDomainCatchallRule,
@@ -24,15 +24,16 @@ inboxRoutes.get('/', async (c) => {
   const mailbox = c.req.query('mailbox')
   const status = c.req.query('status') ?? 'open'
 
-  const [mailboxes, conversations, counts, domains] = await Promise.all([
+  const [mailboxes, conversations, counts, unreadCounts, domains] = await Promise.all([
     getMailboxes(c.env.DB),
     getConversations(c.env.DB, { mailbox, status }),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
 
   const content = inboxView(conversations, { mailbox, status })
-  return c.html(layout(content, { user, mailboxes, counts, domains, activeMailbox: mailbox }))
+  return c.html(layout(content, { user, mailboxes, counts, unreadCounts, domains, activeMailbox: mailbox }))
 })
 
 // ── Add mailbox ───────────────────────────────────────────────────────────────
@@ -40,12 +41,13 @@ inboxRoutes.get('/', async (c) => {
 inboxRoutes.get('/mailboxes/new', async (c) => {
   const user = c.get('user')
   const domainId = c.req.query('domain') ? parseInt(c.req.query('domain')!) : undefined
-  const [mailboxes, counts, domains] = await Promise.all([
+  const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
     getMailboxes(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
-  return c.html(layout(mailboxForm({ domains, selectedDomainId: domainId }), { user, mailboxes, counts, domains, title: 'Add mailbox' }))
+  return c.html(layout(mailboxForm({ domains, selectedDomainId: domainId }), { user, mailboxes, counts, unreadCounts, domains, title: 'Add mailbox' }))
 })
 
 inboxRoutes.post('/mailboxes', async (c) => {
@@ -137,16 +139,17 @@ inboxRoutes.post('/mailboxes', async (c) => {
     }
   }
 
-  const [mailboxes, counts, domains] = await Promise.all([
+  const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
     getMailboxes(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
 
   if (cfError) {
     return c.html(layout(
       mailboxForm({ error: `Mailbox saved but setup failed: ${cfError}`, domains, localPart, name }),
-      { user, mailboxes, counts, domains, title: 'Add mailbox' }
+      { user, mailboxes, counts, unreadCounts, domains, title: 'Add mailbox' }
     ))
   }
 
@@ -159,10 +162,11 @@ inboxRoutes.get('/mailboxes/:id/edit', async (c) => {
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
-  const [mailbox, mailboxes, counts, domains] = await Promise.all([
+  const [mailbox, mailboxes, counts, unreadCounts, domains] = await Promise.all([
     getMailboxById(c.env.DB, id),
     getMailboxes(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
 
@@ -170,7 +174,7 @@ inboxRoutes.get('/mailboxes/:id/edit', async (c) => {
 
   return c.html(layout(
     editMailboxForm(mailbox.id, mailbox.name, mailbox.email, mailbox.sender_name),
-    { user, mailboxes, counts, domains, title: 'Edit mailbox' }
+    { user, mailboxes, counts, unreadCounts, domains, title: 'Edit mailbox' }
   ))
 })
 
@@ -225,10 +229,11 @@ inboxRoutes.get('/domains/:id', async (c) => {
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
-  const [domain, mailboxes, counts, allMailboxes, domains] = await Promise.all([
+  const [domain, mailboxes, counts, unreadCounts, allMailboxes, domains] = await Promise.all([
     getDomainById(c.env.DB, id),
     getMailboxesByDomain(c.env.DB, id),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
   ])
@@ -237,7 +242,7 @@ inboxRoutes.get('/domains/:id', async (c) => {
 
   return c.html(layout(
     domainSettingsView(domain, mailboxes, counts),
-    { user, mailboxes: allMailboxes, counts, domains, title: `${domain.domain} settings` }
+    { user, mailboxes: allMailboxes, counts, unreadCounts, domains, title: `${domain.domain} settings` }
   ))
 })
 
@@ -316,12 +321,13 @@ inboxRoutes.post('/domains/:id/delete', async (c) => {
 inboxRoutes.get('/compose', async (c) => {
   const user = c.get('user')
   const toEmail = c.req.query('to') ?? ''
-  const [mailboxes, counts, domains] = await Promise.all([
+  const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
     getMailboxes(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
-  return c.html(layout(composeForm({ mailboxes, toEmail }), { user, mailboxes, counts, domains, title: 'New message' }))
+  return c.html(layout(composeForm({ mailboxes, toEmail }), { user, mailboxes, counts, unreadCounts, domains, title: 'New message' }))
 })
 
 inboxRoutes.post('/compose', async (c) => {
@@ -334,12 +340,12 @@ inboxRoutes.post('/compose', async (c) => {
   const bodyText = String(body.body_text ?? '').trim()
 
   if (!from || !to || !subject || (!bodyText && !bodyHtml)) {
-    const [mailboxes, counts, domains] = await Promise.all([
-      getMailboxes(c.env.DB), getMailboxCounts(c.env.DB), getDomains(c.env.DB),
+    const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
+      getMailboxes(c.env.DB), getMailboxCounts(c.env.DB), getUnreadCounts(c.env.DB), getDomains(c.env.DB),
     ])
     return c.html(layout(
       composeForm({ mailboxes, toEmail: to, subject, error: 'All fields are required.' }),
-      { user, mailboxes, counts, domains, title: 'New message' }
+      { user, mailboxes, counts, unreadCounts, domains, title: 'New message' }
     ))
   }
 

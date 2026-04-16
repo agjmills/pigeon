@@ -3,7 +3,7 @@ import type { AppEnv, Customer, Conversation } from '../types'
 import {
   getCustomerById, createCustomer, updateCustomer,
   getConversationsByCustomer, linkConversationToCustomer,
-  getConversation, getMailboxes, getMailboxCounts, getDomains,
+  getConversation, getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
   getAllCustomers,
 } from '../lib/db'
 import { layout, escapeHtml, formatDate } from '../views/layout'
@@ -13,13 +13,14 @@ export const customerRoutes = new Hono<AppEnv>()
 // List all customers
 customerRoutes.get('/', async (c) => {
   const user = c.get('user')
-  const [customers, mailboxes, domains, counts] = await Promise.all([
+  const [customers, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getAllCustomers(c.env.DB),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
   ])
-  return c.html(layout(customersListView(customers), { user, mailboxes, domains, counts, title: 'Contacts' }))
+  return c.html(layout(customersListView(customers), { user, mailboxes, domains, counts, unreadCounts, title: 'Contacts' }))
 })
 
 // Create customer from a conversation and redirect back
@@ -42,18 +43,19 @@ customerRoutes.get('/:id', async (c) => {
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
-  const [customer, conversations, mailboxes, domains, counts] = await Promise.all([
+  const [customer, conversations, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getCustomerById(c.env.DB, id),
     getConversationsByCustomer(c.env.DB, id),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
     getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
   ])
 
   if (!customer) return c.notFound()
 
   return c.html(layout(customerView(customer, conversations), {
-    user, mailboxes, domains, counts,
+    user, mailboxes, domains, counts, unreadCounts,
     title: customer.name || customer.email,
   }))
 })
