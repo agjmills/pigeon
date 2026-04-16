@@ -282,6 +282,10 @@ const DESIGN_SYSTEM = `
     flex-shrink: 0;
     line-height: 1;
   }
+  .badge-muted {
+    background: var(--border-strong);
+    color: var(--surface);
+  }
 
   /* ── Inputs ── */
   .field {
@@ -445,6 +449,29 @@ const DESIGN_SYSTEM = `
     border: 1px solid rgba(192,74,30,.18);
   }
   .dark .bubble-out { border-color: rgba(224,96,44,.22); }
+  .bubble-note {
+    background: var(--warn-s);
+    border: 1px solid rgba(146,64,14,.18);
+  }
+  .dark .bubble-note { border-color: rgba(251,191,36,.18); }
+  .note-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--warn-t);
+    margin-bottom: 4px;
+  }
+
+  /* ── Unread indicator ── */
+  .unread-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    margin-top: 5px;
+  }
 
   /* ── Customer bar ── */
   .customer-bar {
@@ -569,12 +596,15 @@ export function layout(
     mailboxes: Mailbox[]
     domains: Domain[]
     counts: Record<string, number>
+    unreadCounts?: Record<string, number>
     activeMailbox?: string
     title?: string
   }
 ): string {
   const { user, mailboxes, domains, counts, activeMailbox } = opts
+  const unreadCounts = opts.unreadCounts ?? {}
   const totalOpen = Object.values(counts).reduce((a, b) => a + b, 0)
+  const totalUnread = Object.values(unreadCounts).reduce((a, b) => a + b, 0)
 
   const mailboxesByDomain = new Map<number, Mailbox[]>()
   for (const mb of mailboxes) {
@@ -587,13 +617,18 @@ export function layout(
   const domainSections = domains.map(domain => {
     const dMailboxes = mailboxesByDomain.get(domain.id) ?? []
     const rows = dMailboxes.map(mb => {
-      const count = counts[mb.email] ?? 0
+      const unread = unreadCounts[mb.email] ?? 0
+      const open = counts[mb.email] ?? 0
       const active = activeMailbox === mb.email
       return `
         <a href="/?mailbox=${encodeURIComponent(mb.email)}" hx-boost="true"
            class="nav-item${active ? ' active' : ''}">
           <span class="nav-item-label">${escapeHtml(mb.name)}</span>
-          ${count > 0 ? `<span class="badge">${count}</span>` : ''}
+          ${unread > 0
+            ? `<span class="badge">${unread}</span>`
+            : open > 0
+              ? `<span class="badge badge-muted">${open}</span>`
+              : ''}
         </a>`
     }).join('')
 
@@ -660,7 +695,11 @@ export function layout(
       <div class="sidebar-scroll">
         <a href="/" hx-boost="true" class="nav-item${!activeMailbox ? ' active' : ''}">
           <span class="nav-item-label">All inboxes</span>
-          ${totalOpen > 0 ? `<span class="badge">${totalOpen}</span>` : ''}
+          ${totalUnread > 0
+            ? `<span class="badge">${totalUnread}</span>`
+            : totalOpen > 0
+              ? `<span class="badge badge-muted">${totalOpen}</span>`
+              : ''}
         </a>
         ${domainSections}
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">

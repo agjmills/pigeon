@@ -56,7 +56,20 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
 
   const thread = messages.map(msg => {
     const isOut = msg.direction === 'outbound'
+    const isNote = msg.direction === 'note'
     const body = renderBody(msg)
+
+    if (isNote) {
+      return `
+        <div style="display:flex;gap:10px;max-width:580px;margin:0 auto">
+          <div style="flex:1;min-width:0">
+            <div class="bubble bubble-note">
+              <div class="note-label">Note — ${escapeHtml(msg.from_name || msg.from_email)} · ${formatDate(msg.created_at)}</div>
+              ${body}
+            </div>
+          </div>
+        </div>`
+    }
 
     return `
       <div style="display:flex;gap:10px;${isOut ? 'flex-direction:row-reverse' : ''}">
@@ -66,7 +79,7 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
         <div style="flex:1;min-width:0;max-width:580px">
           <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:5px;${isOut ? 'flex-direction:row-reverse' : ''}">
             <span style="font-size:12.5px;font-weight:500;color:var(--t1)">
-              ${isOut ? escapeHtml(msg.from_name || msg.from_email) : escapeHtml(msg.from_name || msg.from_email)}
+              ${escapeHtml(msg.from_name || msg.from_email)}
             </span>
             <span style="font-size:11.5px;color:var(--t3)">${formatDate(msg.created_at)}</span>
           </div>
@@ -77,7 +90,15 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
 
   return `
     <div data-conv="${conv.id}" style="padding:20px;display:flex;flex-direction:column;gap:20px">
-      <div id="ai-summary"></div>
+      ${conv.ai_summary
+        ? `<div id="ai-summary" class="ai-summary">
+            <div class="ai-summary-label">
+              <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" /></svg>
+              AI Summary
+            </div>
+            ${escapeHtml(conv.ai_summary).replace(/\n/g, '<br>')}
+          </div>`
+        : `<div id="ai-summary"></div>`}
       ${customerBar(conv, customer)}
       ${thread}
       ${isOpen ? replyForm(conv) : `
@@ -166,13 +187,22 @@ function customerBar(conv: Conversation, customer: Customer | null): string {
 function replyForm(conv: Conversation): string {
   return `
     <div style="border-top:1px solid var(--border);padding-top:20px">
-      <form hx-post="/c/${conv.id}/reply"
+      <div style="display:flex;gap:2px;margin-bottom:10px" id="reply-tabs">
+        <button type="button" class="btn btn-sm btn-secondary" data-mode="reply"
+                onclick="switchReplyMode('reply', ${conv.id})"
+                style="font-size:12px" id="tab-reply">Reply</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-mode="note"
+                onclick="switchReplyMode('note', ${conv.id})"
+                style="font-size:12px" id="tab-note">Note</button>
+      </div>
+      <form id="reply-form"
+            hx-post="/c/${conv.id}/reply"
             hx-target="div[data-conv='${conv.id}']"
             hx-swap="outerHTML"
             hx-indicator="#reply-spinner"
             onsubmit="document.getElementById('reply-body-html').value=document.getElementById('reply-editor').innerHTML;document.getElementById('reply-body-text').value=document.getElementById('reply-editor').innerText.trim()">
 
-        <div class="editor-wrap" style="margin-bottom:12px">
+        <div class="editor-wrap" style="margin-bottom:12px" id="editor-wrap">
           <div class="editor-toolbar">
             <button type="button" onmousedown="event.preventDefault();document.execCommand('bold')" class="toolbar-btn" title="Bold"><strong>B</strong></button>
             <button type="button" onmousedown="event.preventDefault();document.execCommand('italic')" class="toolbar-btn" title="Italic"><em>I</em></button>
@@ -196,15 +226,48 @@ function replyForm(conv: Conversation): string {
         <input type="hidden" name="body_text" id="reply-body-text">
 
         <div style="display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:12px;color:var(--t3)">
+          <span id="reply-meta" style="font-size:12px;color:var(--t3)">
             From <strong style="color:var(--t2)">${escapeHtml(conv.mailbox_email)}</strong>
             to <strong style="color:var(--t2)">${escapeHtml(conv.customer_email)}</strong>
           </span>
-          <button type="submit" class="btn btn-primary btn-sm" style="gap:6px">
+          <button type="submit" class="btn btn-primary btn-sm" style="gap:6px" id="reply-submit">
             Send reply
             <span id="reply-spinner" class="htmx-indicator">…</span>
           </button>
         </div>
       </form>
+      <script>
+        function switchReplyMode(mode, convId) {
+          var form = document.getElementById('reply-form');
+          var wrap = document.getElementById('editor-wrap');
+          var editor = document.getElementById('reply-editor');
+          var meta = document.getElementById('reply-meta');
+          var submit = document.getElementById('reply-submit');
+          var tabReply = document.getElementById('tab-reply');
+          var tabNote = document.getElementById('tab-note');
+          if (mode === 'note') {
+            form.setAttribute('hx-post', '/c/' + convId + '/note');
+            editor.setAttribute('data-placeholder', 'Write an internal note…');
+            wrap.style.borderColor = 'var(--warn-t)';
+            meta.style.display = 'none';
+            submit.firstChild.textContent = 'Add note';
+            submit.style.background = 'var(--warn-t)';
+            submit.style.borderColor = 'var(--warn-t)';
+            tabNote.className = 'btn btn-sm btn-secondary';
+            tabReply.className = 'btn btn-sm btn-ghost';
+          } else {
+            form.setAttribute('hx-post', '/c/' + convId + '/reply');
+            editor.setAttribute('data-placeholder', 'Write your reply…');
+            wrap.style.borderColor = '';
+            meta.style.display = '';
+            submit.firstChild.textContent = 'Send reply';
+            submit.style.background = '';
+            submit.style.borderColor = '';
+            tabReply.className = 'btn btn-sm btn-secondary';
+            tabNote.className = 'btn btn-sm btn-ghost';
+          }
+          htmx.process(form);
+        }
+      </script>
     </div>`
 }

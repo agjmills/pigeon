@@ -24,26 +24,29 @@ export function inboxView(
       </div>`
   }
 
-  const rows = conversations.map(conv => `
+  const rows = conversations.map(conv => {
+    const unread = conv.unread === 1
+    return `
     <a href="/c/${conv.id}" hx-boost="true" class="inbox-row">
+      ${unread ? '<div class="unread-dot"></div>' : ''}
       <div class="avatar avatar-warm" style="margin-top:1px">
         ${escapeHtml((conv.customer_name || conv.customer_email).charAt(0).toUpperCase())}
       </div>
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:2px">
-          <span style="font-size:13.5px;font-weight:500;color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          <span style="font-size:13.5px;font-weight:${unread ? '600' : '500'};color:var(--t1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             ${escapeHtml(conv.customer_name || conv.customer_email)}
           </span>
           <span style="font-size:11.5px;color:var(--t3);flex-shrink:0">${formatDate(conv.last_message_at)}</span>
         </div>
-        <p style="font-size:13px;color:var(--t2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0">${escapeHtml(conv.subject)}</p>
+        <p style="font-size:13px;color:var(--${unread ? 't1' : 't2'});font-weight:${unread ? '500' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0">${escapeHtml(conv.subject)}</p>
         <p style="font-size:11.5px;color:var(--t3);margin:2px 0 0">${escapeHtml(conv.mailbox_email)}</p>
       </div>
       ${conv.message_count && conv.message_count > 1
         ? `<span style="font-size:11.5px;color:var(--t3);flex-shrink:0;margin-top:2px">${conv.message_count}</span>`
         : ''}
     </a>`
-  ).join('')
+  }).join('')
 
   return `${tabs}<div>${rows}</div>`
 }
