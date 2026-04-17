@@ -25,16 +25,16 @@ export async function updateDomainCf(db: D1Database, id: number, zoneId: string)
   await db.prepare('UPDATE domains SET cf_zone_id = ? WHERE id = ?').bind(zoneId, id).run()
 }
 
-export async function updateDomainResend(db: D1Database, id: number, resendDomainId: string): Promise<void> {
-  await db.prepare('UPDATE domains SET resend_domain_id = ? WHERE id = ?').bind(resendDomainId, id).run()
+export async function updateDomainProvider(db: D1Database, id: number, providerDomainId: string): Promise<void> {
+  await db.prepare('UPDATE domains SET provider_domain_id = ? WHERE id = ?').bind(providerDomainId, id).run()
 }
 
 export async function updateDomainDnsRecordIds(db: D1Database, id: number, recordIds: string[]): Promise<void> {
   await db.prepare('UPDATE domains SET cf_dns_record_ids = ? WHERE id = ?').bind(JSON.stringify(recordIds), id).run()
 }
 
-export async function updateDomainResendVerified(db: D1Database, id: number, verified: boolean): Promise<void> {
-  await db.prepare('UPDATE domains SET resend_verified = ? WHERE id = ?').bind(verified ? 1 : 0, id).run()
+export async function updateDomainProviderVerified(db: D1Database, id: number, verified: boolean): Promise<void> {
+  await db.prepare('UPDATE domains SET provider_verified = ? WHERE id = ?').bind(verified ? 1 : 0, id).run()
 }
 
 export async function updateDomainCatchallMailbox(db: D1Database, id: number, email: string | null): Promise<void> {

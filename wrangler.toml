@@ -20,7 +20,13 @@ compatibility_flags = ["nodejs_compat"]
 # binding = "ATTACHMENTS"
 # bucket_name = "pigeon-attachments"
 #
+# [vars]
+# EMAIL_PROVIDER = "resend"   # "resend" (default) — add new providers in src/lib/providers/
+#
 # Secrets (never in toml — set via: wrangler secret put <NAME>):
 #   OIDC_CLIENT_SECRET
-#   RESEND_API_KEY
-#   SESSION_SECRET       random 32-byte hex
+#   EMAIL_PROVIDER_CONFIG    # JSON — provider-specific credentials, e.g.:
+#                            #   Resend:  {"apiKey":"re_..."}
+#                            #   SES:     {"accessKeyId":"...","secretAccessKey":"...","region":"us-east-1"}
+#                            #   SMTP:    {"host":"smtp.example.com","port":587,"user":"...","pass":"..."}
+#   SESSION_SECRET           random 32-byte hex
