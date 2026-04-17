@@ -1,8 +1,8 @@
 # Pigeon
 
-Self-hosted multi-domain email inbox built on Cloudflare Workers, D1, R2, and HTMX. Receive email via Cloudflare Email Routing, manage conversations in a clean web UI, reply via Resend.
+Self-hosted multi-domain email inbox built on Cloudflare Workers, D1, R2, and HTMX. Receive email via Cloudflare Email Routing, manage conversations in a clean web UI, send replies via a pluggable email provider.
 
-**Everything runs on the Cloudflare free tier** (Workers, D1, R2). Outbound replies use [Resend](https://resend.com) (free up to 3,000/month).
+**Everything runs on the Cloudflare free tier** (Workers, D1, R2). Outbound sending uses a configurable provider — [Resend](https://resend.com) ships out of the box (free up to 3,000/month), with an interface ready for SES, Postmark, SMTP, or anything else.
 
 ## How it works
 
@@ -22,7 +22,7 @@ Cloudflare Email Routing
 ## Prerequisites
 
 - Cloudflare account (free)
-- [Resend](https://resend.com) account (free)
+- An email sending provider ([Resend](https://resend.com), SES, Postmark, SMTP, etc.)
 - An OIDC provider (Authentik, Auth0, Keycloak, etc.)
 - Node.js + [Wrangler](https://developers.cloudflare.com/workers/wrangler/)
 
@@ -56,6 +56,7 @@ Edit `wrangler.local.toml`:
 OIDC_ISSUER = "https://auth.example.com/..."   # must expose /.well-known/openid-configuration
 OIDC_CLIENT_ID = "pigeon"                      # OAuth2 client ID from your provider
 APP_URL = "https://pigeon.example.com"         # where you'll deploy this
+EMAIL_PROVIDER = "resend"                      # see "Email providers" section
 
 [[d1_databases]]
 binding = "DB"
@@ -70,9 +71,9 @@ bucket_name = "pigeon-attachments"
 ### 4. Set secrets
 
 ```bash
-npx wrangler secret put OIDC_CLIENT_SECRET   # from your OIDC provider
-npx wrangler secret put RESEND_API_KEY       # from resend.com
-npx wrangler secret put SESSION_SECRET       # openssl rand -hex 32
+npx wrangler secret put OIDC_CLIENT_SECRET      # from your OIDC provider
+npx wrangler secret put EMAIL_PROVIDER_CONFIG    # JSON — see "Email providers" below
+npx wrangler secret put SESSION_SECRET           # openssl rand -hex 32
 ```
 
 ### 5. Run database migrations
@@ -101,13 +102,32 @@ For each domain you want to receive at (Cloudflare dashboard → your domain →
 2. Add a rule: address `support@yourdomain.com` → **Send to Worker** → `pigeon`
 3. Or use a catch-all rule to send everything to Pigeon
 
-### 9. Sending domains (Resend)
-
-In the Resend dashboard, add each domain you want to send replies from and add the provided DKIM/SPF DNS records in Cloudflare.
-
-### 10. Add mailboxes
+### 9. Add mailboxes
 
 Log in and use **+ Add mailbox** in the sidebar to register each address (e.g. `support@yourdomain.com`). Pigeon will route inbound email to the matching mailbox.
+
+## Email providers
+
+Pigeon uses a pluggable provider interface for outbound email. Set `EMAIL_PROVIDER` (defaults to `resend`) and `EMAIL_PROVIDER_CONFIG` (a JSON string with provider-specific credentials).
+
+Providers that support domain management will automatically set up DKIM/SPF DNS records in Cloudflare and verify them when you add a mailbox.
+
+### Resend (default)
+
+```toml
+# wrangler.local.toml
+[vars]
+EMAIL_PROVIDER = "resend"
+```
+
+```bash
+npx wrangler secret put EMAIL_PROVIDER_CONFIG
+# paste: {"apiKey":"re_..."}
+```
+
+### Adding a new provider
+
+Create a file in `src/lib/providers/` that implements `EmailSender` (required) and optionally `EmailDomainProvider` (for providers that manage domains and DNS records). Add a case to the factory switch in `src/lib/email-provider.ts`. See `src/lib/providers/resend.ts` for a reference implementation.
 
 ## Local development
 
@@ -119,7 +139,7 @@ npm run dev
 Set secrets locally in `.dev.vars` (gitignored):
 
 ```ini
-AUTHENTIK_CLIENT_SECRET=...
-RESEND_API_KEY=...
+OIDC_CLIENT_SECRET=...
+EMAIL_PROVIDER_CONFIG={"apiKey":"re_..."}
 SESSION_SECRET=...
 ```
