@@ -1,8 +1,8 @@
 # Pigeon
 
-Self-hosted multi-domain email inbox built on Cloudflare Workers, D1, R2, and HTMX. Receive email via Cloudflare Email Routing, manage conversations in a clean web UI, send replies via a pluggable email provider.
+A lightweight, self-hosted conversational CRM for people who run multiple small projects and don't want to choose between a throwaway inbox per domain and a full-blown CRM they'll never fully understand. Manage customers, conversations, and organizations across all your domains in one place.
 
-**Everything runs on the Cloudflare free tier** (Workers, D1, R2). Outbound sending uses a configurable provider — [Resend](https://resend.com) ships out of the box (free up to 3,000/month), with an interface ready for SES, Postmark, SMTP, or anything else.
+Built on Cloudflare Workers, D1, R2, and HTMX. **Everything runs on the Cloudflare free tier.** Outbound sending uses a pluggable provider — [Resend](https://resend.com) ships out of the box (free up to 3,000/month), with an interface ready for SES, Postmark, SMTP, or anything else.
 
 ## How it works
 
