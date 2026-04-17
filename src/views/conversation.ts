@@ -1,10 +1,10 @@
-import type { Conversation, Customer, Message } from '../types'
-import { escapeHtml, formatDate } from './layout'
+import type { Conversation, Customer, Message, Tag } from '../types'
+import { escapeHtml, formatDate, tagBadge } from './layout'
 
-export function conversationView(conv: Conversation, messages: Message[], customer: Customer | null): string {
+export function conversationView(conv: Conversation, messages: Message[], customer: Customer | null, tags: Tag[] = [], allTags: Tag[] = []): string {
   return `
     <div id="conv-${conv.id}" style="display:flex;flex-direction:column;min-height:100%">
-      ${convHeader(conv)}
+      ${convHeader(conv, tags, allTags)}
       ${convBody(conv, messages, customer)}
     </div>`
 }
@@ -13,8 +13,23 @@ export function convBodyView(conv: Conversation, messages: Message[], customer: 
   return convBody(conv, messages, customer)
 }
 
-function convHeader(conv: Conversation): string {
+function convHeader(conv: Conversation, tags: Tag[] = [], allTags: Tag[] = []): string {
   const isOpen = conv.status === 'open'
+  const currentTagIds = new Set(tags.map(t => t.id))
+  const availableTags = allTags.filter(t => !currentTagIds.has(t.id))
+
+  const tagsHtml = tags.length || availableTags.length ? `
+    <div style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+      ${tags.map(t => tagBadge(t, { removable: true, convId: conv.id })).join('')}
+      ${availableTags.length ? `
+        <form method="POST" action="/c/${conv.id}/tags" style="display:inline-flex;align-items:center;margin:0">
+          <select name="tag_id" onchange="if(this.value)this.form.submit()" style="background:transparent;border:1px dashed var(--border-strong);border-radius:4px;padding:2px 6px;font-size:11px;color:var(--t3);cursor:pointer;font-family:inherit;outline:none">
+            <option value="">+ tag</option>
+            ${availableTags.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')}
+          </select>
+        </form>` : ''}
+    </div>` : ''
+
   return `
     <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:10">
       <div style="min-width:0">
@@ -25,6 +40,7 @@ function convHeader(conv: Conversation): string {
           <span style="color:var(--border-strong);margin:0 5px">·</span>
           ${escapeHtml(conv.mailbox_email)}
         </p>
+        ${tagsHtml}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         <button hx-get="/c/${conv.id}/summary"

@@ -8,6 +8,7 @@ import {
   updateDomainResendVerified, updateDomainCatchallMailbox,
   createMailbox, updateMailboxCfRuleId, updateMailboxSenderName, getMailboxesByDomain, deleteDomain,
   createConversation, createMessage,
+  searchConversations, getConversationsByTag, getTagsForConversations, getTagById,
 } from '../lib/db'
 import {
   getZoneId, createDnsRecord, deleteDnsRecord,
@@ -23,16 +24,32 @@ inboxRoutes.get('/', async (c) => {
   const user = c.get('user')
   const mailbox = c.req.query('mailbox')
   const status = c.req.query('status') ?? 'open'
+  const search = c.req.query('q')?.trim() || undefined
+  const tagFilter = c.req.query('tag') ? parseInt(c.req.query('tag')!) : undefined
 
-  const [mailboxes, conversations, counts, unreadCounts, domains] = await Promise.all([
+  const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
     getMailboxes(c.env.DB),
-    getConversations(c.env.DB, { mailbox, status }),
     getMailboxCounts(c.env.DB),
     getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
 
-  const content = inboxView(conversations, { mailbox, status })
+  let conversations
+  let tagName: string | undefined
+  if (search) {
+    conversations = await searchConversations(c.env.DB, search, { mailbox, status })
+  } else if (tagFilter) {
+    const tag = await getTagById(c.env.DB, tagFilter)
+    tagName = tag?.name
+    conversations = tag ? await getConversationsByTag(c.env.DB, tagFilter, { mailbox, status }) : []
+  } else {
+    conversations = await getConversations(c.env.DB, { mailbox, status })
+  }
+
+  const convIds = conversations.map(c => c.id)
+  const tagsByConv = await getTagsForConversations(c.env.DB, convIds)
+
+  const content = inboxView(conversations, { mailbox, status, search, tag: tagFilter?.toString(), tagName }, tagsByConv)
   return c.html(layout(content, { user, mailboxes, counts, unreadCounts, domains, activeMailbox: mailbox }))
 })
 

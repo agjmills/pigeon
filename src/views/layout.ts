@@ -587,7 +587,28 @@ const DESIGN_SYSTEM = `
   .compose-input::placeholder { color: var(--t3); }
   select.compose-input { cursor: pointer; }
   .compose-input option { background: var(--surface); }
-</style>`
+
+  /* ── Tag badges (dark mode) ── */
+  .dark .tag-badge {
+    background: attr(data-dark-bg) !important;
+    color: attr(data-dark-text) !important;
+  }
+</style>
+<script>
+  // Apply dark mode colors to tag badges after DOM load
+  function applyTagColors() {
+    var isDark = document.documentElement.classList.contains('dark');
+    document.querySelectorAll('.tag-badge').forEach(function(el) {
+      var bg = isDark ? el.getAttribute('data-dark-bg') : el.getAttribute('data-light-bg');
+      var text = isDark ? el.getAttribute('data-dark-text') : el.getAttribute('data-light-text');
+      if (bg) el.style.background = bg;
+      if (text) el.style.color = text;
+    });
+  }
+  // Run on page load and HTMX swaps
+  document.addEventListener('DOMContentLoaded', applyTagColors);
+  document.addEventListener('htmx:afterSwap', applyTagColors);
+</script>`
 
 export function layout(
   content: string,
@@ -715,6 +736,13 @@ export function layout(
             </svg>
             <span class="nav-item-label">Organizations</span>
           </a>
+          <a href="/tags" hx-boost="true" class="nav-item" style="gap:8px">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="flex-shrink:0">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 6h.008v.008H6V6z" />
+            </svg>
+            <span class="nav-item-label">Tags</span>
+          </a>
         </div>
       </div>
       <div class="sidebar-bottom">
@@ -749,6 +777,47 @@ export function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;')
 }
+
+const TAG_COLORS: Record<string, { bg: string; text: string }> = {
+  gray:   { bg: 'var(--bg-alt)',    text: 'var(--t2)' },
+  red:    { bg: '#fef2f2',         text: '#b91c1c' },
+  orange: { bg: '#fff7ed',         text: '#c2410c' },
+  yellow: { bg: '#fffbeb',         text: '#a16207' },
+  green:  { bg: '#ecfdf5',         text: '#15803d' },
+  blue:   { bg: '#eff6ff',         text: '#1d4ed8' },
+  purple: { bg: '#faf5ff',         text: '#7e22ce' },
+  pink:   { bg: '#fdf2f8',         text: '#be185d' },
+}
+
+const TAG_COLORS_DARK: Record<string, { bg: string; text: string }> = {
+  gray:   { bg: 'var(--bg-alt)',    text: 'var(--t2)' },
+  red:    { bg: '#2b0f0f',         text: '#fca5a5' },
+  orange: { bg: '#2a1408',         text: '#fdba74' },
+  yellow: { bg: '#2a2008',         text: '#fcd34d' },
+  green:  { bg: '#0a2a1e',         text: '#6ee7b7' },
+  blue:   { bg: '#0c1a2e',         text: '#93c5fd' },
+  purple: { bg: '#1a0a2e',         text: '#c4b5fd' },
+  pink:   { bg: '#2a0a1e',         text: '#f9a8d4' },
+}
+
+export function tagBadge(tag: { name: string; color: string; id?: number }, opts?: { removable?: boolean; convId?: number }): string {
+  const c = TAG_COLORS[tag.color] ?? TAG_COLORS.gray
+  const cd = TAG_COLORS_DARK[tag.color] ?? TAG_COLORS_DARK.gray
+  const style = `display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:500;white-space:nowrap;background:${c.bg};color:${c.text}`
+
+  if (opts?.removable && tag.id && opts.convId) {
+    return `<span class="tag-badge" style="${style}" data-light-bg="${c.bg}" data-light-text="${c.text}" data-dark-bg="${cd.bg}" data-dark-text="${cd.text}">
+      ${escapeHtml(tag.name)}
+      <form method="POST" action="/c/${opts.convId}/tags/${tag.id}/remove" style="display:inline;margin:0;padding:0">
+        <button type="submit" style="background:none;border:none;cursor:pointer;padding:0;margin:0;font-size:10px;color:inherit;opacity:.6;line-height:1" title="Remove tag">✕</button>
+      </form>
+    </span>`
+  }
+
+  return `<span class="tag-badge" style="${style}" data-light-bg="${c.bg}" data-light-text="${c.text}" data-dark-bg="${cd.bg}" data-dark-text="${cd.text}">${escapeHtml(tag.name)}</span>`
+}
+
+export const TAG_COLOR_OPTIONS = Object.keys(TAG_COLORS)
 
 export function formatDate(ts: number): string {
   const d = new Date(ts * 1000)

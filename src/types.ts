@@ -81,6 +81,13 @@ export type Organization = {
   updated_at: number
 }
 
+export type Tag = {
+  id: number
+  name: string
+  color: string
+  created_at: number
+}
+
 export type Message = {
   id: number
   conversation_id: number
