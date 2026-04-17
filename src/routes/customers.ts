@@ -43,9 +43,13 @@ customerRoutes.get('/:id', async (c) => {
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
-  const [customer, conversations, mailboxes, domains, counts, unreadCounts] = await Promise.all([
+  const status = c.req.query('status') ?? 'open'
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1') || 1)
+  const perPage = 20
+
+  const [customer, { conversations, total }, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getCustomerById(c.env.DB, id),
-    getConversationsByCustomer(c.env.DB, id),
+    getConversationsByCustomer(c.env.DB, id, { status, limit: perPage, offset: (page - 1) * perPage }),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
     getMailboxCounts(c.env.DB),
@@ -54,7 +58,9 @@ customerRoutes.get('/:id', async (c) => {
 
   if (!customer) return c.notFound()
 
-  return c.html(layout(customerView(customer, conversations), {
+  const totalPages = Math.ceil(total / perPage)
+
+  return c.html(layout(customerView(customer, conversations, { status, page, totalPages, total }), {
     user, mailboxes, domains, counts, unreadCounts,
     title: customer.name || customer.email,
   }))
@@ -95,7 +101,14 @@ function customersListView(customers: Customer[]): string {
     </div>`
 }
 
-function customerView(customer: Customer, conversations: Conversation[]): string {
+function customerView(
+  customer: Customer,
+  conversations: Conversation[],
+  pagination: { status: string; page: number; totalPages: number; total: number }
+): string {
+  const { status, page, totalPages, total } = pagination
+  const base = `/customers/${customer.id}`
+
   const convRows = conversations.map(conv => `
     <a href="/c/${conv.id}" hx-boost="true" class="row-item" style="text-decoration:none">
       <div class="min-w-0 flex-1">
@@ -103,10 +116,28 @@ function customerView(customer: Customer, conversations: Conversation[]): string
         <p style="font-size:11.5px;color:var(--t3)">${escapeHtml(conv.mailbox_email)}</p>
       </div>
       <div class="flex items-center gap-2 ml-3 shrink-0">
-        <span class="${conv.status === 'open' ? 'pill-open' : 'pill-closed'}">${conv.status}</span>
         <span style="font-size:11.5px;color:var(--t3)">${formatDate(conv.last_message_at)}</span>
       </div>
     </a>`).join('')
+
+  const tabs = `
+    <div class="tabs" style="margin-bottom:0">
+      <a href="${base}?status=open"  hx-boost="true" class="tab${status === 'open'  ? ' active' : ''}">Open</a>
+      <a href="${base}?status=closed" hx-boost="true" class="tab${status === 'closed' ? ' active' : ''}">Closed</a>
+    </div>`
+
+  let paginationHtml = ''
+  if (totalPages > 1) {
+    const pageLinks: string[] = []
+    if (page > 1) {
+      pageLinks.push(`<a href="${base}?status=${status}&page=${page - 1}" hx-boost="true" style="font-size:12px;color:var(--accent);text-decoration:none">← Prev</a>`)
+    }
+    pageLinks.push(`<span style="font-size:12px;color:var(--t3)">Page ${page} of ${totalPages}</span>`)
+    if (page < totalPages) {
+      pageLinks.push(`<a href="${base}?status=${status}&page=${page + 1}" hx-boost="true" style="font-size:12px;color:var(--accent);text-decoration:none">Next →</a>`)
+    }
+    paginationHtml = `<div style="display:flex;align-items:center;justify-content:center;gap:16px;padding:12px 0">${pageLinks.join('')}</div>`
+  }
 
   return `
     <div class="page-wrap">
@@ -142,9 +173,11 @@ function customerView(customer: Customer, conversations: Conversation[]): string
 
       <div>
         <p class="section-title">Conversations</p>
+        ${tabs}
         <div class="row-list">
-          ${conversations.length ? convRows : '<p style="font-size:13px;color:var(--t3);padding:16px">No conversations yet.</p>'}
+          ${conversations.length ? convRows : `<p style="font-size:13px;color:var(--t3);padding:16px;text-align:center">No ${status} conversations.</p>`}
         </div>
+        ${paginationHtml}
       </div>
     </div>`
 }
