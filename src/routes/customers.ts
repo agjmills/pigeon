@@ -1,10 +1,11 @@
 import { Hono } from 'hono'
-import type { AppEnv, Customer, Conversation } from '../types'
+import type { AppEnv, Customer, Conversation, Organization } from '../types'
 import {
   getCustomerById, createCustomer, updateCustomer,
   getConversationsByCustomer, linkConversationToCustomer,
   getConversation, getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
-  getAllCustomers,
+  getAllCustomers, getOrganizationsForCustomer, getAllOrganizations,
+  addCustomerToOrganization, removeCustomerFromOrganization,
 } from '../lib/db'
 import { layout, escapeHtml, formatDate } from '../views/layout'
 
@@ -47,9 +48,11 @@ customerRoutes.get('/:id', async (c) => {
   const page = Math.max(1, parseInt(c.req.query('page') ?? '1') || 1)
   const perPage = 20
 
-  const [customer, { conversations, total }, mailboxes, domains, counts, unreadCounts] = await Promise.all([
+  const [customer, { conversations, total }, customerOrgs, allOrgs, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getCustomerById(c.env.DB, id),
     getConversationsByCustomer(c.env.DB, id, { status, limit: perPage, offset: (page - 1) * perPage }),
+    getOrganizationsForCustomer(c.env.DB, id),
+    getAllOrganizations(c.env.DB),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
     getMailboxCounts(c.env.DB),
@@ -59,8 +62,10 @@ customerRoutes.get('/:id', async (c) => {
   if (!customer) return c.notFound()
 
   const totalPages = Math.ceil(total / perPage)
+  const orgIds = new Set(customerOrgs.map(o => o.id))
+  const availableOrgs = allOrgs.filter(o => !orgIds.has(o.id))
 
-  return c.html(layout(customerView(customer, conversations, { status, page, totalPages, total }), {
+  return c.html(layout(customerView(customer, conversations, { status, page, totalPages, total }, customerOrgs, availableOrgs), {
     user, mailboxes, domains, counts, unreadCounts,
     title: customer.name || customer.email,
   }))
@@ -76,6 +81,25 @@ customerRoutes.post('/:id', async (c) => {
     notes: body.notes !== undefined ? String(body.notes) : undefined,
   })
 
+  return c.redirect(`/customers/${id}`)
+})
+
+// Add customer to organization
+customerRoutes.post('/:id/organizations', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.parseBody()
+  const orgId = parseInt(String(body.organization_id))
+  if (orgId) {
+    await addCustomerToOrganization(c.env.DB, id, orgId)
+  }
+  return c.redirect(`/customers/${id}`)
+})
+
+// Remove customer from organization
+customerRoutes.post('/:id/organizations/:orgId/remove', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const orgId = parseInt(c.req.param('orgId'))
+  await removeCustomerFromOrganization(c.env.DB, id, orgId)
   return c.redirect(`/customers/${id}`)
 })
 
@@ -104,7 +128,9 @@ function customersListView(customers: Customer[]): string {
 function customerView(
   customer: Customer,
   conversations: Conversation[],
-  pagination: { status: string; page: number; totalPages: number; total: number }
+  pagination: { status: string; page: number; totalPages: number; total: number },
+  organizations: Organization[] = [],
+  availableOrgs: Organization[] = []
 ): string {
   const { status, page, totalPages, total } = pagination
   const base = `/customers/${customer.id}`
@@ -170,6 +196,33 @@ function customerView(
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
+
+      <div class="mb-8">
+        <p class="section-title">Organizations</p>
+        <div class="row-list">
+          ${organizations.length ? organizations.map(org => `
+            <div class="row-item" style="gap:12px">
+              <a href="/organizations/${org.id}" hx-boost="true" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;text-decoration:none">
+                <div class="avatar avatar-warm" style="width:24px;height:24px;font-size:10px;flex-shrink:0">
+                  ${escapeHtml(org.name.charAt(0).toUpperCase())}
+                </div>
+                <span style="font-size:13px;color:var(--t1)" class="truncate">${escapeHtml(org.name)}</span>
+                ${org.domain ? `<span style="font-size:11.5px;color:var(--t3)" class="truncate">${escapeHtml(org.domain)}</span>` : ''}
+              </a>
+              <form method="POST" action="/customers/${customer.id}/organizations/${org.id}/remove" style="flex-shrink:0">
+                <button type="submit" class="btn-text-muted" title="Remove from organization">✕</button>
+              </form>
+            </div>`).join('') : '<p style="font-size:13px;color:var(--t3);padding:16px;text-align:center">Not in any organization.</p>'}
+          ${availableOrgs.length ? `
+            <form method="POST" action="/customers/${customer.id}/organizations" style="display:flex;gap:8px;padding:10px 16px">
+              <select name="organization_id" class="field" style="flex:1;font-size:12px;padding:5px 8px">
+                <option value="">Add to organization…</option>
+                ${availableOrgs.map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('')}
+              </select>
+              <button type="submit" class="btn btn-secondary btn-sm">Add</button>
+            </form>` : ''}
+        </div>
+      </div>
 
       <div>
         <p class="section-title">Conversations</p>

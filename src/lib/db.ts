@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -366,4 +366,82 @@ export async function markConversationUnread(db: D1Database, id: number): Promis
 
 export async function saveAiSummary(db: D1Database, id: number, summary: string): Promise<void> {
   await db.prepare('UPDATE conversations SET ai_summary = ? WHERE id = ?').bind(summary, id).run()
+}
+
+// ── Organizations ────────────────────────────────────────────────────────────
+
+export async function getAllOrganizations(db: D1Database): Promise<Organization[]> {
+  const { results } = await db.prepare('SELECT * FROM organizations ORDER BY name ASC').all<Organization>()
+  return results
+}
+
+export async function getOrganizationById(db: D1Database, id: number): Promise<Organization | null> {
+  return db.prepare('SELECT * FROM organizations WHERE id = ?').bind(id).first<Organization>()
+}
+
+export async function createOrganization(db: D1Database, data: { name: string; domain?: string | null; notes?: string | null }): Promise<number> {
+  const result = await db
+    .prepare('INSERT INTO organizations (name, domain, notes) VALUES (?, ?, ?)')
+    .bind(data.name, data.domain ?? null, data.notes ?? null)
+    .run()
+  return result.meta.last_row_id as number
+}
+
+export async function updateOrganization(db: D1Database, id: number, data: { name?: string; domain?: string; notes?: string }): Promise<void> {
+  const fields: string[] = []
+  const values: (string | number)[] = []
+  if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name) }
+  if (data.domain !== undefined) { fields.push('domain = ?'); values.push(data.domain) }
+  if (data.notes !== undefined) { fields.push('notes = ?'); values.push(data.notes) }
+  if (!fields.length) return
+  fields.push('updated_at = unixepoch()')
+  await db.prepare(`UPDATE organizations SET ${fields.join(', ')} WHERE id = ?`).bind(...values, id).run()
+}
+
+export async function deleteOrganization(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM organizations WHERE id = ?').bind(id).run()
+}
+
+export async function getOrganizationMembers(db: D1Database, organizationId: number): Promise<Customer[]> {
+  const { results } = await db
+    .prepare('SELECT c.* FROM customers c JOIN customer_organizations co ON co.customer_id = c.id WHERE co.organization_id = ? ORDER BY c.name ASC, c.email ASC')
+    .bind(organizationId)
+    .all<Customer>()
+  return results
+}
+
+export async function getOrganizationsForCustomer(db: D1Database, customerId: number): Promise<Organization[]> {
+  const { results } = await db
+    .prepare('SELECT o.* FROM organizations o JOIN customer_organizations co ON co.organization_id = o.id WHERE co.customer_id = ? ORDER BY o.name ASC')
+    .bind(customerId)
+    .all<Organization>()
+  return results
+}
+
+export async function addCustomerToOrganization(db: D1Database, customerId: number, organizationId: number): Promise<void> {
+  await db.prepare('INSERT OR IGNORE INTO customer_organizations (customer_id, organization_id) VALUES (?, ?)').bind(customerId, organizationId).run()
+}
+
+export async function removeCustomerFromOrganization(db: D1Database, customerId: number, organizationId: number): Promise<void> {
+  await db.prepare('DELETE FROM customer_organizations WHERE customer_id = ? AND organization_id = ?').bind(customerId, organizationId).run()
+}
+
+export async function getConversationsByOrganization(
+  db: D1Database,
+  organizationId: number,
+  opts: { status?: string; limit?: number; offset?: number } = {}
+): Promise<{ conversations: Conversation[]; total: number }> {
+  const status = opts.status ?? 'open'
+  const limit = opts.limit ?? 20
+  const offset = opts.offset ?? 0
+
+  const [{ results }, countRow] = await Promise.all([
+    db.prepare('SELECT * FROM conversations WHERE customer_id IN (SELECT customer_id FROM customer_organizations WHERE organization_id = ?) AND status = ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?')
+      .bind(organizationId, status, limit, offset)
+      .all<Conversation>(),
+    db.prepare('SELECT COUNT(*) as count FROM conversations WHERE customer_id IN (SELECT customer_id FROM customer_organizations WHERE organization_id = ?) AND status = ?')
+      .bind(organizationId, status)
+      .first<{ count: number }>(),
+  ])
+  return { conversations: results, total: countRow?.count ?? 0 }
 }
