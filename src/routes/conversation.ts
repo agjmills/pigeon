@@ -119,7 +119,6 @@ conversationRoutes.get('/:id/summary', async (c) => {
           { role: 'user', content: transcript },
         ],
       }) as { response?: string }
-      console.log('AI result:', JSON.stringify(result))
       summary = result.response?.trim() || null
       if (summary) await saveAiSummary(c.env.DB, id, summary)
     } catch (err) {
