@@ -4,6 +4,7 @@ import { authRoutes } from './routes/auth'
 import { inboxRoutes } from './routes/inbox'
 import { conversationRoutes } from './routes/conversation'
 import { customerRoutes } from './routes/customers'
+import { organizationRoutes } from './routes/organizations'
 import { authMiddleware } from './middleware/auth'
 import { emailHandler } from './email-handler'
 
@@ -17,6 +18,7 @@ app.use('/*', authMiddleware)
 app.route('/', inboxRoutes)
 app.route('/c', conversationRoutes)
 app.route('/customers', customerRoutes)
+app.route('/organizations', organizationRoutes)
 
 export default {
   fetch: app.fetch,

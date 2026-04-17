@@ -72,6 +72,15 @@ export type Customer = {
   updated_at: number
 }
 
+export type Organization = {
+  id: number
+  name: string
+  domain: string | null
+  notes: string | null
+  created_at: number
+  updated_at: number
+}
+
 export type Message = {
   id: number
   conversation_id: number
