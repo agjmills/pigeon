@@ -6,7 +6,6 @@ export async function emailHandler(
   message: ForwardableEmailMessage,
   env: Bindings,
 ): Promise<void> {
-  // Validate shared secret when called via HTTP pipe (Email Workers skip this)
   const rawEmail = await streamToBuffer(message.raw)
 
   // Store raw email in R2 for archival

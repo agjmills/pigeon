@@ -7,7 +7,6 @@ export type Bindings = {
   OIDC_CLIENT_SECRET: string
   APP_URL: string
   RESEND_API_KEY: string
-  PIPE_SECRET: string
   SESSION_SECRET: string
   CF_EMAIL_TOKEN: string
 }
