@@ -4,8 +4,8 @@ import {
   getMailboxes, getConversations, getMailboxCounts, getUnreadCounts,
   getMailboxById, updateMailboxName, deleteMailbox,
   getDomains, getDomainByName, getDomainById, createDomain,
-  updateDomainCf, updateDomainResend, updateDomainDnsRecordIds, updateDomainCatchallRule,
-  updateDomainResendVerified, updateDomainCatchallMailbox,
+  updateDomainCf, updateDomainProvider, updateDomainDnsRecordIds, updateDomainCatchallRule,
+  updateDomainProviderVerified, updateDomainCatchallMailbox,
   createMailbox, updateMailboxCfRuleId, updateMailboxSenderName, getMailboxesByDomain, deleteDomain,
   createConversation, createMessage,
   searchConversations, getConversationsByTag, getTagsForConversations, getTagById,
@@ -14,7 +14,7 @@ import {
   getZoneId, createDnsRecord, deleteDnsRecord,
   createRoutingRule, deleteRoutingRule, createCatchallRule,
 } from '../lib/cloudflare'
-import { setupResendDomain, deleteResendDomain, verifyResendDomain, sendReply } from '../lib/resend'
+import { createEmailProvider, supportsDomainManagement } from '../lib/email-provider'
 import { layout, escapeHtml } from '../views/layout'
 import { inboxView } from '../views/inbox'
 
@@ -107,17 +107,18 @@ inboxRoutes.post('/mailboxes', async (c) => {
     }
   }
 
-  // Step 3: ensure Resend domain is set up + DNS records added to CF
-  if (!cfError && !domain!.resend_domain_id) {
+  // Step 3: ensure email provider domain is set up + DNS records added to CF
+  const emailProvider = createEmailProvider(c.env)
+  if (!cfError && !domain!.provider_domain_id && supportsDomainManagement(emailProvider)) {
     try {
-      const { id: resendDomainId, records } = await setupResendDomain(c.env.RESEND_API_KEY, domainName)
-      await updateDomainResend(c.env.DB, domainId, resendDomainId)
+      const { domainId: providerDomainId, records } = await emailProvider.setupDomain(domainName)
+      await updateDomainProvider(c.env.DB, domainId, providerDomainId)
 
       const zoneId = domain!.cf_zone_id!
       const dnsRecordIds: string[] = []
       const dnsErrors: string[] = []
       for (const rec of records) {
-        if (rec.record === 'DKIM' || rec.record === 'SPF') {
+        if (rec.purpose === 'dkim' || rec.purpose === 'spf') {
           try {
             const recordId = await createDnsRecord(c.env.CF_EMAIL_TOKEN, zoneId, {
               type: rec.type,
@@ -135,9 +136,9 @@ inboxRoutes.post('/mailboxes', async (c) => {
       if (dnsRecordIds.length) await updateDomainDnsRecordIds(c.env.DB, domainId, dnsRecordIds)
       if (dnsErrors.length) throw new Error(`DNS record errors: ${dnsErrors.join('; ')}`)
 
-      // Trigger Resend domain verification now that DNS records are in place
-      const verified = await verifyResendDomain(c.env.RESEND_API_KEY, resendDomainId)
-      if (verified) await updateDomainResendVerified(c.env.DB, domainId, true)
+      // Trigger domain verification now that DNS records are in place
+      const verified = await emailProvider.verifyDomain(providerDomainId)
+      if (verified) await updateDomainProviderVerified(c.env.DB, domainId, true)
     } catch (err) {
       cfError = err instanceof Error ? err.message : String(err)
     }
@@ -233,7 +234,7 @@ inboxRoutes.post('/mailboxes/:id/delete', async (c) => {
   if (mailbox.domain_id) {
     const remaining = await getMailboxesByDomain(c.env.DB, mailbox.domain_id)
     if (remaining.length === 0) {
-      await cleanupDomain(c.env.DB, c.env.CF_EMAIL_TOKEN, c.env.RESEND_API_KEY, mailbox.domain_id)
+      await cleanupDomain(c.env, mailbox.domain_id)
     }
   }
 
@@ -304,10 +305,13 @@ inboxRoutes.post('/domains/:id/catchall-mailbox', async (c) => {
 inboxRoutes.post('/domains/:id/verify', async (c) => {
   const id = parseInt(c.req.param('id'))
   const domain = await getDomainById(c.env.DB, id)
-  if (!domain || !domain.resend_domain_id) return c.redirect(`/domains/${id}`)
+  if (!domain || !domain.provider_domain_id) return c.redirect(`/domains/${id}`)
 
-  const verified = await verifyResendDomain(c.env.RESEND_API_KEY, domain.resend_domain_id)
-  await updateDomainResendVerified(c.env.DB, id, verified)
+  const emailProvider = createEmailProvider(c.env)
+  if (!supportsDomainManagement(emailProvider)) return c.redirect(`/domains/${id}`)
+
+  const verified = await emailProvider.verifyDomain(domain.provider_domain_id)
+  await updateDomainProviderVerified(c.env.DB, id, verified)
 
   return c.redirect(`/domains/${id}`)
 })
@@ -328,7 +332,7 @@ inboxRoutes.post('/domains/:id/delete', async (c) => {
     await deleteMailbox(c.env.DB, mb.id)
   }
 
-  await cleanupDomain(c.env.DB, c.env.CF_EMAIL_TOKEN, c.env.RESEND_API_KEY, id)
+  await cleanupDomain(c.env, id)
 
   return c.redirect('/')
 })
@@ -369,8 +373,8 @@ inboxRoutes.post('/compose', async (c) => {
   const mailboxes = await getMailboxes(c.env.DB)
   const mailbox = mailboxes.find(mb => mb.email === from)
 
-  const { messageId } = await sendReply({
-    apiKey: c.env.RESEND_API_KEY,
+  const emailProvider = createEmailProvider(c.env)
+  const { messageId } = await emailProvider.send({
     from,
     fromName: mailbox?.sender_name || mailbox?.name || from,
     to,
@@ -404,18 +408,16 @@ inboxRoutes.post('/compose', async (c) => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function cleanupDomain(
-  db: D1Database,
-  cfToken: string,
-  resendKey: string,
+  env: import('../types').Bindings,
   domainId: number
 ): Promise<void> {
-  const domain = await getDomainById(db, domainId)
+  const domain = await getDomainById(env.DB, domainId)
   if (!domain) return
 
   // Delete catch-all rule
   if (domain.cf_catchall_rule_id && domain.cf_zone_id) {
     try {
-      await deleteRoutingRule(cfToken, domain.cf_zone_id, domain.cf_catchall_rule_id)
+      await deleteRoutingRule(env.CF_EMAIL_TOKEN, domain.cf_zone_id, domain.cf_catchall_rule_id)
     } catch {}
   }
 
@@ -424,19 +426,22 @@ async function cleanupDomain(
     const ids: string[] = JSON.parse(domain.cf_dns_record_ids)
     for (const recordId of ids) {
       try {
-        await deleteDnsRecord(cfToken, domain.cf_zone_id, recordId)
+        await deleteDnsRecord(env.CF_EMAIL_TOKEN, domain.cf_zone_id, recordId)
       } catch {}
     }
   }
 
-  // Delete Resend domain
-  if (domain.resend_domain_id) {
-    try {
-      await deleteResendDomain(resendKey, domain.resend_domain_id)
-    } catch {}
+  // Delete provider domain
+  if (domain.provider_domain_id) {
+    const emailProvider = createEmailProvider(env)
+    if (supportsDomainManagement(emailProvider)) {
+      try {
+        await emailProvider.deleteDomain(domain.provider_domain_id)
+      } catch {}
+    }
   }
 
-  await deleteDomain(db, domainId)
+  await deleteDomain(env.DB, domainId)
 }
 
 // ── Views ─────────────────────────────────────────────────────────────────────
@@ -484,7 +489,7 @@ function mailboxForm(opts: {
         <button type="submit" class="btn btn-primary w-full">Add mailbox</button>
       </form>
       <p class="field-hint mt-3">
-        Cloudflare Email Routing and Resend will be configured automatically for new domains.
+        Cloudflare Email Routing and email sending will be configured automatically for new domains.
       </p>
     </div>`
 }
@@ -549,14 +554,14 @@ function domainSettingsView(
       <a href="/" class="page-back">← Back</a>
       <h2 class="page-title" style="margin-bottom:6px">${escapeHtml(domain.domain)}</h2>
       <div class="flex items-center gap-3 mb-6">
-        ${domain.resend_domain_id
-          ? domain.resend_verified
-            ? `<span style="font-size:12px;color:var(--success)">✓ Resend verified</span>`
-            : `<span style="font-size:12px;color:var(--warn-t)">⚠ Resend not yet verified</span>
+        ${domain.provider_domain_id
+          ? domain.provider_verified
+            ? `<span style="font-size:12px;color:var(--success)">✓ Sending verified</span>`
+            : `<span style="font-size:12px;color:var(--warn-t)">⚠ Sending not yet verified</span>
                <form method="POST" action="/domains/${domain.id}/verify" class="inline">
                  <button type="submit" class="btn-text">Trigger verification</button>
                </form>`
-          : `<span style="font-size:12px;color:var(--t3)">Resend not configured</span>`}
+          : `<span style="font-size:12px;color:var(--t3)">Sending not configured</span>`}
       </div>
 
       <!-- Mailboxes -->
@@ -604,7 +609,7 @@ function domainSettingsView(
       <div class="danger-zone">
         <p style="font-size:12px;font-weight:600;color:var(--danger);margin-bottom:6px">Danger zone</p>
         <p class="field-hint mb-3">
-          Deletes all mailboxes, CF routing rules, Resend domain, and DNS records for this domain.
+          Deletes all mailboxes, routing rules, email provider domain, and DNS records for this domain.
           Existing conversations are not deleted.
         </p>
         <form method="POST" action="/domains/${domain.id}/delete"

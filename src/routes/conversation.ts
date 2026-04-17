@@ -7,7 +7,7 @@ import {
   markConversationRead, saveAiSummary,
   getTagsForConversation, getAllTags, addTagToConversation, removeTagFromConversation,
 } from '../lib/db'
-import { sendReply } from '../lib/resend'
+import { createEmailProvider } from '../lib/email-provider'
 import { layout } from '../views/layout'
 import { conversationView, convBodyView } from '../views/conversation'
 
@@ -61,8 +61,8 @@ conversationRoutes.post('/:id/reply', async (c) => {
   const inReplyTo = await getLastMessageId(c.env.DB, id)
 
   const mailbox = mailboxes.find(mb => mb.email === conv.mailbox_email)
-  const { messageId } = await sendReply({
-    apiKey: c.env.RESEND_API_KEY,
+  const emailProvider = createEmailProvider(c.env)
+  const { messageId } = await emailProvider.send({
     from: conv.mailbox_email,
     fromName: mailbox?.sender_name || mailbox?.name || conv.mailbox_email,
     to: conv.customer_email,

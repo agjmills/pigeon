@@ -6,7 +6,8 @@ export type Bindings = {
   OIDC_CLIENT_ID: string
   OIDC_CLIENT_SECRET: string
   APP_URL: string
-  RESEND_API_KEY: string
+  EMAIL_PROVIDER: string
+  EMAIL_PROVIDER_CONFIG: string
   SESSION_SECRET: string
   CF_EMAIL_TOKEN: string
 }
@@ -31,8 +32,8 @@ export type Domain = {
   cf_zone_id: string | null
   cf_catchall_rule_id: string | null
   cf_dns_record_ids: string | null
-  resend_domain_id: string | null
-  resend_verified: number
+  provider_domain_id: string | null
+  provider_verified: number
   catchall_mailbox_email: string | null
   created_at: number
 }
