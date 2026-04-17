@@ -1,7 +1,6 @@
 {
   "name": "pigeon",
   "version": "0.1.0",
-  "private": true,
   "scripts": {
     "dev": "wrangler dev --config wrangler.local.toml",
     "deploy": "wrangler deploy --config wrangler.local.toml",
