@@ -306,12 +306,24 @@ export async function updateCustomer(db: D1Database, id: number, data: { name?: 
   await db.prepare(`UPDATE customers SET ${fields.join(', ')} WHERE id = ?`).bind(...values, id).run()
 }
 
-export async function getConversationsByCustomer(db: D1Database, customerId: number): Promise<Conversation[]> {
-  const { results } = await db
-    .prepare('SELECT * FROM conversations WHERE customer_id = ? ORDER BY last_message_at DESC')
-    .bind(customerId)
-    .all<Conversation>()
-  return results
+export async function getConversationsByCustomer(
+  db: D1Database,
+  customerId: number,
+  opts: { status?: string; limit?: number; offset?: number } = {}
+): Promise<{ conversations: Conversation[]; total: number }> {
+  const status = opts.status ?? 'open'
+  const limit = opts.limit ?? 20
+  const offset = opts.offset ?? 0
+
+  const [{ results }, countRow] = await Promise.all([
+    db.prepare('SELECT * FROM conversations WHERE customer_id = ? AND status = ? ORDER BY last_message_at DESC LIMIT ? OFFSET ?')
+      .bind(customerId, status, limit, offset)
+      .all<Conversation>(),
+    db.prepare('SELECT COUNT(*) as count FROM conversations WHERE customer_id = ? AND status = ?')
+      .bind(customerId, status)
+      .first<{ count: number }>(),
+  ])
+  return { conversations: results, total: countRow?.count ?? 0 }
 }
 
 export async function getMailboxCounts(
