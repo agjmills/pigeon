@@ -97,7 +97,8 @@ conversationRoutes.get('/:id/summary', async (c) => {
   const conv = await getConversation(c.env.DB, id)
   if (!conv) return c.notFound()
 
-  let summary = conv.ai_summary
+  const refresh = c.req.query('refresh') === '1'
+  let summary = refresh ? null : conv.ai_summary
   if (!summary) {
     const messages = await getMessages(c.env.DB, id)
     const transcript = messages
@@ -105,12 +106,11 @@ conversationRoutes.get('/:id/summary', async (c) => {
       .map(msg => {
         const who = msg.direction === 'outbound' ? 'Agent' : 'Customer'
         const body = msg.body_text || (msg.body_html ?? '').replace(/<[^>]*>/g, '')
-        return `${who}: ${body.trim()}`
+        return `${who}: ${body.trim().slice(0, 800)}`
       }).join('\n\n')
 
-    summary = 'Could not generate summary.'
     try {
-      const result = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct-fp8', {
+      const result = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
         messages: [
           {
             role: 'system',
@@ -119,14 +119,16 @@ conversationRoutes.get('/:id/summary', async (c) => {
           { role: 'user', content: transcript },
         ],
       }) as { response: string }
-      summary = result.response?.trim() ?? summary
+      summary = result.response?.trim() || null
+      if (summary) await saveAiSummary(c.env.DB, id, summary)
     } catch (err) {
       console.error('AI summary error:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      return c.html(summaryHtml(`Summary failed: ${msg}`))
     }
-    await saveAiSummary(c.env.DB, id, summary)
   }
 
-  return c.html(summaryHtml(summary))
+  return c.html(summaryHtml(summary ?? 'No summary could be generated.'))
 })
 
 conversationRoutes.post('/:id/status', async (c) => {
