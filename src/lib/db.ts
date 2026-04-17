@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer, Organization } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -444,4 +444,137 @@ export async function getConversationsByOrganization(
       .first<{ count: number }>(),
   ])
   return { conversations: results, total: countRow?.count ?? 0 }
+}
+
+// ── Tags ─────────────────────────────────────────────────────────────────────
+
+export async function getAllTags(db: D1Database): Promise<Tag[]> {
+  const { results } = await db.prepare('SELECT * FROM tags ORDER BY name ASC').all<Tag>()
+  return results
+}
+
+export async function getTagById(db: D1Database, id: number): Promise<Tag | null> {
+  return db.prepare('SELECT * FROM tags WHERE id = ?').bind(id).first<Tag>()
+}
+
+export async function getTagByName(db: D1Database, name: string): Promise<Tag | null> {
+  return db.prepare('SELECT * FROM tags WHERE name = ?').bind(name).first<Tag>()
+}
+
+export async function createTag(db: D1Database, data: { name: string; color?: string }): Promise<number> {
+  const result = await db
+    .prepare('INSERT INTO tags (name, color) VALUES (?, ?)')
+    .bind(data.name.toLowerCase().trim(), data.color ?? 'gray')
+    .run()
+  return result.meta.last_row_id as number
+}
+
+export async function updateTag(db: D1Database, id: number, data: { name?: string; color?: string }): Promise<void> {
+  const fields: string[] = []
+  const values: (string | number)[] = []
+  if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name.toLowerCase().trim()) }
+  if (data.color !== undefined) { fields.push('color = ?'); values.push(data.color) }
+  if (!fields.length) return
+  await db.prepare(`UPDATE tags SET ${fields.join(', ')} WHERE id = ?`).bind(...values, id).run()
+}
+
+export async function deleteTag(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM tags WHERE id = ?').bind(id).run()
+}
+
+export async function getTagsForConversation(db: D1Database, conversationId: number): Promise<Tag[]> {
+  const { results } = await db
+    .prepare('SELECT t.* FROM tags t JOIN conversation_tags ct ON ct.tag_id = t.id WHERE ct.conversation_id = ? ORDER BY t.name ASC')
+    .bind(conversationId)
+    .all<Tag>()
+  return results
+}
+
+export async function getTagsForConversations(db: D1Database, conversationIds: number[]): Promise<Record<number, Tag[]>> {
+  if (!conversationIds.length) return {}
+  const placeholders = conversationIds.map(() => '?').join(',')
+  const { results } = await db
+    .prepare(`SELECT ct.conversation_id, t.* FROM tags t JOIN conversation_tags ct ON ct.tag_id = t.id WHERE ct.conversation_id IN (${placeholders}) ORDER BY t.name ASC`)
+    .bind(...conversationIds)
+    .all<Tag & { conversation_id: number }>()
+  const map: Record<number, Tag[]> = {}
+  for (const row of results) {
+    const cid = row.conversation_id
+    if (!map[cid]) map[cid] = []
+    map[cid].push({ id: row.id, name: row.name, color: row.color, created_at: row.created_at })
+  }
+  return map
+}
+
+export async function addTagToConversation(db: D1Database, conversationId: number, tagId: number): Promise<void> {
+  await db.prepare('INSERT OR IGNORE INTO conversation_tags (conversation_id, tag_id) VALUES (?, ?)').bind(conversationId, tagId).run()
+}
+
+export async function removeTagFromConversation(db: D1Database, conversationId: number, tagId: number): Promise<void> {
+  await db.prepare('DELETE FROM conversation_tags WHERE conversation_id = ? AND tag_id = ?').bind(conversationId, tagId).run()
+}
+
+export async function getConversationsByTag(
+  db: D1Database,
+  tagId: number,
+  opts: { status?: string; mailbox?: string } = {}
+): Promise<Conversation[]> {
+  let query = `
+    SELECT c.*, COUNT(m.id) as message_count
+    FROM conversations c
+    JOIN conversation_tags ct ON ct.conversation_id = c.id
+    LEFT JOIN messages m ON m.conversation_id = c.id
+    WHERE ct.tag_id = ?
+  `
+  const bindings: (string | number)[] = [tagId]
+
+  if (opts.status) {
+    query += ' AND c.status = ?'
+    bindings.push(opts.status)
+  }
+  if (opts.mailbox) {
+    query += ' AND c.mailbox_email = ?'
+    bindings.push(opts.mailbox)
+  }
+
+  query += ' GROUP BY c.id ORDER BY c.last_message_at DESC LIMIT 100'
+
+  const { results } = await db.prepare(query).bind(...bindings).all<Conversation>()
+  return results
+}
+
+// ── Search ───────────────────────────────────────────────────────────────────
+
+export async function searchConversations(
+  db: D1Database,
+  query: string,
+  opts: { mailbox?: string; status?: string } = {}
+): Promise<Conversation[]> {
+  const ftsQuery = query.split(/\s+/).filter(Boolean).map(t => `"${t}"*`).join(' ')
+  if (!ftsQuery) return []
+
+  let sql = `
+    SELECT DISTINCT c.*, COUNT(m.id) as message_count
+    FROM conversations c
+    LEFT JOIN messages m ON m.conversation_id = c.id
+    WHERE (
+      c.id IN (SELECT rowid FROM conversations_fts WHERE conversations_fts MATCH ?)
+      OR c.id IN (SELECT conversation_id FROM messages WHERE id IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))
+    )
+  `
+  const bindings: (string | number)[] = [ftsQuery, ftsQuery]
+
+  if (opts.status) {
+    sql += ' AND c.status = ?'
+    bindings.push(opts.status)
+  }
+  if (opts.mailbox) {
+    sql += ' AND c.mailbox_email = ?'
+    bindings.push(opts.mailbox)
+  }
+
+  sql += ' GROUP BY c.id ORDER BY c.last_message_at DESC LIMIT 50'
+
+  const { results } = await db.prepare(sql).bind(...bindings).all<Conversation>()
+  return results
 }

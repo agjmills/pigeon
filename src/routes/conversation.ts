@@ -5,6 +5,7 @@ import {
   createMessage, setConversationStatus, getLastMessageId,
   getCustomerById, linkConversationToCustomer, createCustomer,
   markConversationRead, saveAiSummary,
+  getTagsForConversation, getAllTags, addTagToConversation, removeTagFromConversation,
 } from '../lib/db'
 import { sendReply } from '../lib/resend'
 import { layout } from '../views/layout'
@@ -16,9 +17,11 @@ conversationRoutes.get('/:id', async (c) => {
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
-  const [conv, messages, mailboxes, domains, counts, unreadCounts] = await Promise.all([
+  const [conv, messages, tags, allTags, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getConversation(c.env.DB, id),
     getMessages(c.env.DB, id),
+    getTagsForConversation(c.env.DB, id),
+    getAllTags(c.env.DB),
     getMailboxes(c.env.DB),
     getDomains(c.env.DB),
     getMailboxCounts(c.env.DB),
@@ -31,7 +34,7 @@ conversationRoutes.get('/:id', async (c) => {
 
   const customer = conv.customer_id ? await getCustomerById(c.env.DB, conv.customer_id) : null
 
-  return c.html(layout(conversationView(conv, messages, customer), {
+  return c.html(layout(conversationView(conv, messages, customer, tags, allTags), {
     user, mailboxes, domains, counts, unreadCounts,
     activeMailbox: conv.mailbox_email,
     title: conv.subject,
@@ -146,7 +149,30 @@ conversationRoutes.post('/:id/status', async (c) => {
   ])
 
   const customer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
-  return c.html(conversationView(updatedConv!, messages, customer))
+  const [tags, allTags] = await Promise.all([
+    getTagsForConversation(c.env.DB, id),
+    getAllTags(c.env.DB),
+  ])
+  return c.html(conversationView(updatedConv!, messages, customer, tags, allTags))
+})
+
+// Add tag to conversation
+conversationRoutes.post('/:id/tags', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const body = await c.req.parseBody()
+  const tagId = parseInt(String(body.tag_id))
+  if (tagId) {
+    await addTagToConversation(c.env.DB, id, tagId)
+  }
+  return c.redirect(`/c/${id}`)
+})
+
+// Remove tag from conversation
+conversationRoutes.post('/:id/tags/:tagId/remove', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const tagId = parseInt(c.req.param('tagId'))
+  await removeTagFromConversation(c.env.DB, id, tagId)
+  return c.redirect(`/c/${id}`)
 })
 
 conversationRoutes.post('/:id/note', async (c) => {
