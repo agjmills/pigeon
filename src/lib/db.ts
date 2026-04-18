@@ -68,6 +68,10 @@ export async function getMailboxById(db: D1Database, id: number): Promise<Mailbo
   return db.prepare('SELECT * FROM mailboxes WHERE id = ?').bind(id).first<Mailbox>()
 }
 
+export async function getMailboxByEmail(db: D1Database, email: string): Promise<Mailbox | null> {
+  return db.prepare('SELECT * FROM mailboxes WHERE email = ?').bind(email).first<Mailbox>()
+}
+
 export async function getMailboxesByDomain(db: D1Database, domainId: number): Promise<Mailbox[]> {
   const { results } = await db
     .prepare('SELECT * FROM mailboxes WHERE domain_id = ? ORDER BY email')

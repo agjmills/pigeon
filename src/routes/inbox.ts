@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import type { AppEnv, Domain } from '../types'
 import {
   getMailboxes, getConversations, getMailboxCounts, getUnreadCounts,
-  getMailboxById, updateMailboxName, deleteMailbox,
+  getMailboxById, getMailboxByEmail, updateMailboxName, deleteMailbox,
   getDomains, getDomainByName, getDomainById, createDomain,
   updateDomainCf, updateDomainProvider, updateDomainDnsRecordIds, updateDomainCatchallRule,
   updateDomainProviderVerified, updateDomainCatchallMailbox,
@@ -90,11 +90,10 @@ inboxRoutes.get('/mailboxes/new', async (c) => {
 
 inboxRoutes.post('/mailboxes', async (c) => {
   const body = await c.req.parseBody()
-  const localPart = String(body.local ?? '').trim().toLowerCase()
+  const rawLocal = String(body.local ?? '').trim().toLowerCase()
+  const localPart = rawLocal.includes('@') ? rawLocal.split('@')[0] : rawLocal
   const selectedDomainId = body.domain_id ? parseInt(String(body.domain_id)) : null
   const newDomainName = String(body.new_domain ?? '').trim().toLowerCase()
-  const name = String(body.name ?? '').trim()
-
   const user = c.get('user')
   let cfError: string | null = null
 
@@ -110,8 +109,21 @@ inboxRoutes.post('/mailboxes', async (c) => {
     return c.text('Missing domain', 400)
   }
 
-  if (!localPart || !name) return c.text('Missing fields', 400)
+  if (!localPart) return c.text('Missing fields', 400)
   const email = `${localPart}@${domainName}`
+  const name = String(body.name ?? '').trim() || email
+
+  // Reject duplicates before touching DB or CF
+  const existing = await getMailboxByEmail(c.env.DB, email)
+  if (existing) {
+    const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
+      getMailboxes(c.env.DB), getMailboxCounts(c.env.DB), getUnreadCounts(c.env.DB), getDomains(c.env.DB),
+    ])
+    return c.html(layout(
+      mailboxForm({ error: `${email} is already configured as a mailbox.`, domains, localPart, name }),
+      { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: 'Add mailbox' }
+    ))
+  }
 
   // Step 1: ensure domain record exists
   const domainId = await createDomain(c.env.DB, domainName)
@@ -532,14 +544,15 @@ function mailboxForm(opts: {
           <input type="text" name="new_domain" placeholder="example.com" class="field">
         </div>
         <div>
-          <label class="field-label">Email address</label>
+          <label class="field-label">Local part <span style="font-weight:400;color:var(--t3)">(the part before the @)</span></label>
           <input type="text" name="local" required value="${escapeHtml(opts.localPart ?? '')}"
-                 placeholder="support" class="field">
+                 placeholder="alex" class="field">
+          <p class="field-hint">Enter just the local part, e.g. <strong>alex</strong> — or paste a full address like alex@cleargym.uk and it will be extracted.</p>
         </div>
         <div>
-          <label class="field-label">Display name</label>
-          <input type="text" name="name" required value="${escapeHtml(opts.name ?? '')}"
-                 placeholder="Acme Support" class="field">
+          <label class="field-label">Display name <span style="font-weight:400;color:var(--t3)">(optional)</span></label>
+          <input type="text" name="name" value="${escapeHtml(opts.name ?? '')}"
+                 placeholder="Leave blank to use the email address" class="field">
         </div>
         <button type="submit" class="btn btn-primary w-full">Add mailbox</button>
       </form>
