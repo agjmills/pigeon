@@ -880,15 +880,19 @@ export async function removeApiTokenPermission(
     .run()
 }
 
+export async function updateMessageBodyHtml(db: D1Database, messageId: number, bodyHtml: string): Promise<void> {
+  await db.prepare('UPDATE messages SET body_html = ? WHERE id = ?').bind(bodyHtml, messageId).run()
+}
+
 // ── Message attachments ───────────────────────────────────────────────────────
 
 export async function insertMessageAttachment(
   db: D1Database,
-  data: { message_id: number; filename: string; mime_type: string; size: number; r2_key: string }
+  data: { message_id: number; filename: string; mime_type: string; size: number; r2_key: string; content_id?: string | null }
 ): Promise<number> {
   const result = await db
-    .prepare('INSERT INTO message_attachments (message_id, filename, mime_type, size, r2_key) VALUES (?, ?, ?, ?, ?)')
-    .bind(data.message_id, data.filename, data.mime_type, data.size, data.r2_key)
+    .prepare('INSERT INTO message_attachments (message_id, filename, mime_type, size, r2_key, content_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(data.message_id, data.filename, data.mime_type, data.size, data.r2_key, data.content_id ?? null)
     .run()
   return result.meta.last_row_id as number
 }

@@ -86,6 +86,32 @@ export function apiRequest(
   })
 }
 
+/**
+ * Create a scoped API token for a user with specific permissions.
+ * The user must already exist. Returns the raw token string.
+ */
+export async function createScopedToken(
+  userEmail: string,
+  permissions: Array<{ resource_type: string; resource_id: number; level: string }>,
+  name = 'scoped-test-token'
+): Promise<string> {
+  const db = env.DB
+  const rawToken = 'pgn_' + crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
+  const hash = await hashToken(rawToken)
+  const result = await db
+    .prepare('INSERT INTO api_tokens (token_hash, name, user_email, scoped) VALUES (?, ?, ?, 1)')
+    .bind(hash, name, userEmail)
+    .run()
+  const tokenId = result.meta.last_row_id as number
+  for (const p of permissions) {
+    await db
+      .prepare('INSERT INTO api_token_permissions (token_id, resource_type, resource_id, level) VALUES (?, ?, ?, ?)')
+      .bind(tokenId, p.resource_type, p.resource_id, p.level)
+      .run()
+  }
+  return rawToken
+}
+
 async function hashToken(token: string): Promise<string> {
   const data = new TextEncoder().encode(token)
   const buf = await crypto.subtle.digest('SHA-256', data)

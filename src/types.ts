@@ -158,6 +158,7 @@ export type MessageAttachment = {
   mime_type: string
   size: number
   r2_key: string
+  content_id: string | null
   created_at: number
 }
 

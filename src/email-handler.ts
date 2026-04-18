@@ -2,8 +2,9 @@ import PostalMime from 'postal-mime'
 import type { Bindings, MailboxWebhook } from './types'
 import {
   getMailbox, getDomainByName, findConversationByMessageId, findOpenConversationBySubject,
-  createConversation, createMessage, markConversationUnread,
-  setCustomerBounced, insertMessageAttachment, getWebhooksForMailbox,
+  createConversation, createMessage, markConversationUnread, linkConversationToCustomer,
+  setCustomerBounced, insertMessageAttachment, updateMessageBodyHtml, getWebhooksForMailbox,
+  getCustomerByEmail,
 } from './lib/db'
 
 export async function emailHandler(
@@ -87,6 +88,12 @@ export async function emailHandler(
       customer_email: fromEmail,
       customer_name: fromName,
     })
+
+    // Auto-link to existing customer if one matches the sender email
+    const existingCustomer = await getCustomerByEmail(env.DB, fromEmail)
+    if (existingCustomer) {
+      await linkConversationToCustomer(env.DB, conversationId, existingCustomer.id)
+    }
   }
 
   const msgId = await createMessage(env.DB, {
@@ -105,14 +112,15 @@ export async function emailHandler(
 
   await markConversationUnread(env.DB, conversationId)
 
-  // Store inbound attachments in R2
+  // Store inbound attachments in R2 and resolve CID references in HTML
   if (parsed.attachments?.length) {
     const attsForSave = parsed.attachments.map(a => ({
       filename: a.filename ?? null,
       mimeType: a.mimeType,
+      contentId: a.contentId ?? null,
       content: typeof a.content === 'string' ? new TextEncoder().encode(a.content) : a.content,
     }))
-    ctx.waitUntil(saveAttachments(env, msgId, attsForSave))
+    ctx.waitUntil(saveAttachments(env, msgId, attsForSave, parsed.html ?? null))
   }
 
   // Fire registered webhooks for this mailbox
@@ -133,8 +141,11 @@ export async function emailHandler(
 async function saveAttachments(
   env: Bindings,
   msgId: number,
-  attachments: Array<{ filename?: string | null; mimeType?: string; content?: ArrayBuffer | Uint8Array }>
+  attachments: Array<{ filename?: string | null; mimeType?: string; contentId?: string | null; content?: ArrayBuffer | Uint8Array }>,
+  bodyHtml: string | null,
 ): Promise<void> {
+  const cidMap: Array<{ contentId: string; dbId: number }> = []
+
   for (const att of attachments) {
     if (!att.content) continue
     const filename = att.filename || 'attachment'
@@ -143,7 +154,21 @@ async function saveAttachments(
     const size = bytes.byteLength
     const r2Key = `attachments/${msgId}/${crypto.randomUUID()}-${filename}`
     await env.ATTACHMENTS.put(r2Key, bytes)
-    await insertMessageAttachment(env.DB, { message_id: msgId, filename, mime_type: mimeType, size, r2_key: r2Key })
+    const dbId = await insertMessageAttachment(env.DB, {
+      message_id: msgId, filename, mime_type: mimeType, size, r2_key: r2Key, content_id: att.contentId,
+    })
+    if (att.contentId) cidMap.push({ contentId: att.contentId, dbId })
+  }
+
+  // Replace cid: references in the HTML body with attachment URLs
+  if (bodyHtml && cidMap.length) {
+    let updatedHtml = bodyHtml
+    for (const { contentId, dbId } of cidMap) {
+      updatedHtml = updatedHtml.replaceAll(`cid:${contentId}`, `/attachments/${dbId}`)
+    }
+    if (updatedHtml !== bodyHtml) {
+      await updateMessageBodyHtml(env.DB, msgId, updatedHtml)
+    }
   }
 }
 
