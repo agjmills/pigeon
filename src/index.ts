@@ -8,6 +8,7 @@ import { organizationRoutes } from './routes/organizations'
 import { tagRoutes } from './routes/tags'
 import { auditRoutes } from './routes/audit'
 import { settingsRoutes } from './routes/settings'
+import { apiRoutes } from './routes/api'
 import { authMiddleware } from './middleware/auth'
 import { emailHandler } from './email-handler'
 import { trackingRoutes } from './routes/tracking'
@@ -27,6 +28,7 @@ app.route('/organizations', organizationRoutes)
 app.route('/tags', tagRoutes)
 app.route('/audit', auditRoutes)
 app.route('/settings', settingsRoutes)
+app.route('/api/v1', apiRoutes)
 
 export default {
   fetch: app.fetch,
