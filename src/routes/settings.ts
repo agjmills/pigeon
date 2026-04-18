@@ -1,9 +1,11 @@
 import { Hono } from 'hono'
-import type { AppEnv, User, UserPermission, Domain, Mailbox, PermissionLevel, ResourceType, ApiToken } from '../types'
+import type { AppEnv, User, UserPermission, Domain, Mailbox, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission } from '../types'
 import {
   getAllUsers, setUserAdmin, getUserPermissions, getUserByEmail,
   addUserPermission, removeUserPermissionByResource,
   getApiTokensForUser, createApiToken, deleteApiToken, generateRawToken,
+  getApiTokenById, setApiTokenScoped, getApiTokenPermissions,
+  addApiTokenPermission, removeApiTokenPermission,
   getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
 } from '../lib/db'
 import { accessibleMailboxIds } from '../lib/permissions'
@@ -124,6 +126,57 @@ settingsRoutes.post('/tokens/:id/delete', async (c) => {
   const id = parseInt(c.req.param('id'))
   await deleteApiToken(c.env.DB, id, user.email)
   return c.redirect('/settings/tokens')
+})
+
+settingsRoutes.get('/tokens/:id', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const [token, tokenPerms, allDomains, allMailboxes, counts, unreadCounts] = await Promise.all([
+    getApiTokenById(c.env.DB, id),
+    getApiTokenPermissions(c.env.DB, id),
+    getDomains(c.env.DB),
+    getMailboxes(c.env.DB),
+    getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
+  ])
+  if (!token) return c.notFound()
+  // Users can only view their own tokens; admins can view any
+  if (token.user_email !== user.email && !c.get('isAdmin')) return c.text('Forbidden', 403)
+  return c.html(layout(tokenPermissionEditorView(token, tokenPerms, allDomains, allMailboxes), {
+    user, mailboxes: allMailboxes, domains: allDomains, counts, unreadCounts,
+    accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), allMailboxes),
+    title: `Token — ${token.name}`,
+  }))
+})
+
+settingsRoutes.post('/tokens/:id/scoped', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const token = await getApiTokenById(c.env.DB, id)
+  if (!token) return c.notFound()
+  if (token.user_email !== user.email && !c.get('isAdmin')) return c.text('Forbidden', 403)
+  const body = await c.req.parseBody()
+  const scoped = body.scoped === '1'
+  await setApiTokenScoped(c.env.DB, id, scoped)
+  return c.redirect(`/settings/tokens/${id}`)
+})
+
+settingsRoutes.post('/tokens/:id/permissions', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  const token = await getApiTokenById(c.env.DB, id)
+  if (!token) return c.notFound()
+  if (token.user_email !== user.email && !c.get('isAdmin')) return c.text('Forbidden', 403)
+  const body = await c.req.parseBody()
+  const resourceType = String(body.resource_type) as ResourceType
+  const resourceId = parseInt(String(body.resource_id))
+  const level = String(body.level)
+  if (level === 'none') {
+    await removeApiTokenPermission(c.env.DB, id, resourceType, resourceId)
+  } else {
+    await addApiTokenPermission(c.env.DB, id, resourceType, resourceId, level as PermissionLevel)
+  }
+  return c.redirect(`/settings/tokens/${id}`)
 })
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -290,11 +343,14 @@ function tokensView(tokens: ApiToken[], newToken: string | null): string {
     <div class="row-item" style="gap:12px">
       <div class="flex-1 min-w-0">
         <p style="font-size:13px;font-weight:500;color:var(--t1)">${escapeHtml(t.name)}</p>
-        <p style="font-size:11.5px;color:var(--t3)">Created ${formatDate(t.created_at)}${t.last_used_at ? ` · Last used ${formatDate(t.last_used_at)}` : ' · Never used'}</p>
+        <p style="font-size:11.5px;color:var(--t3)">Created ${formatDate(t.created_at)}${t.last_used_at ? ` · Last used ${formatDate(t.last_used_at)}` : ' · Never used'}${t.scoped ? ' · <strong>Scoped</strong>' : ''}</p>
       </div>
-      <form method="POST" action="/settings/tokens/${t.id}/delete" onsubmit="return confirm('Revoke this token?')">
-        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--danger)">Revoke</button>
-      </form>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <a href="/settings/tokens/${t.id}" hx-boost="true" class="btn btn-secondary btn-sm">Permissions</a>
+        <form method="POST" action="/settings/tokens/${t.id}/delete" onsubmit="return confirm('Revoke this token?')">
+          <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--danger)">Revoke</button>
+        </form>
+      </div>
     </div>`).join('')
 
   return `
@@ -318,7 +374,126 @@ function tokensView(tokens: ApiToken[], newToken: string | null): string {
       </div>
 
       <div class="alert alert-warn" style="margin-top:16px">
-        Tokens carry your full permissions. Use <code style="font-size:11.5px">Authorization: Bearer &lt;token&gt;</code> in API requests.
+        By default tokens carry your full permissions. Use the Permissions editor to restrict a token to specific mailboxes or contacts.
+        Use <code style="font-size:11.5px">Authorization: Bearer &lt;token&gt;</code> in API requests.
       </div>
+    </div>`
+}
+
+function tokenPermRow(
+  label: string,
+  resourceType: ResourceType,
+  resourceId: number,
+  tokenId: number,
+  current: PermissionLevel | null
+): string {
+  const actionUrl = `/settings/tokens/${tokenId}/permissions`
+  return `
+    <div style="display:flex;align-items:center;gap:12px;padding:9px 16px;border-bottom:1px solid var(--border)">
+      <span style="font-size:13px;color:var(--t1);flex:1;min-width:0" class="truncate">${label}</span>
+      <form method="POST" action="${actionUrl}" style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <input type="hidden" name="resource_type" value="${resourceType}">
+        <input type="hidden" name="resource_id" value="${resourceId}">
+        <select name="level" class="field" style="font-size:12px;padding:4px 8px;width:auto" onchange="this.form.submit()">
+          <option value="none"${!current ? ' selected' : ''}>No access</option>
+          <option value="read"${current === 'read' ? ' selected' : ''}>Read</option>
+          <option value="edit"${current === 'edit' ? ' selected' : ''}>Edit</option>
+        </select>
+      </form>
+    </div>`
+}
+
+function tokenPermissionEditorView(
+  token: ApiToken,
+  tokenPerms: ApiTokenPermission[],
+  domains: Domain[],
+  mailboxes: Mailbox[]
+): string {
+  const permMap = new Map<string, PermissionLevel>()
+  for (const p of tokenPerms) {
+    permMap.set(`${p.resource_type}:${p.resource_id}`, p.level)
+  }
+
+  const scopedToggle = `
+    <div class="card" style="padding:16px;margin-bottom:24px">
+      <p class="section-title" style="margin-bottom:8px">Scope mode</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:12px">
+        When scoped, this token uses only the explicit grants below and is never an admin, regardless of the owner's role.
+        When unscoped, it inherits the owner's full permissions.
+      </p>
+      <form method="POST" action="/settings/tokens/${token.id}/scoped" style="display:flex;align-items:center;gap:10px">
+        <input type="hidden" name="scoped" value="${token.scoped ? '0' : '1'}">
+        <button type="submit" class="btn ${token.scoped ? 'btn-secondary' : 'btn-primary'} btn-sm">
+          ${token.scoped ? 'Switch to unscoped (inherit owner permissions)' : 'Switch to scoped (use explicit grants below)'}
+        </button>
+        <span style="font-size:12px;color:var(--t3)">Currently: <strong>${token.scoped ? 'Scoped' : 'Unscoped'}</strong></span>
+      </form>
+    </div>`
+
+  const notScopedBanner = !token.scoped ? `
+    <div class="alert alert-warn" style="margin-bottom:16px">
+      This token is unscoped — it inherits the owner's full permissions. Switch to scoped mode to restrict it to specific grants.
+    </div>` : ''
+
+  const domainSections = domains.map(domain => {
+    const domainMailboxes = mailboxes.filter(mb => mb.domain_id === domain.id)
+
+    const mailboxRows = domainMailboxes.map(mb =>
+      tokenPermRow(mb.email, 'mailbox', mb.id, token.id, permMap.get(`mailbox:${mb.id}`) ?? null)
+    ).join('')
+
+    return `
+      <div class="card" style="margin-bottom:16px;overflow:hidden">
+        <div style="padding:10px 16px;background:var(--bg-alt);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" style="color:var(--t3);flex-shrink:0">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253" />
+          </svg>
+          <span style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--t2)">${escapeHtml(domain.domain)}</span>
+        </div>
+
+        <div style="border-bottom:1px solid var(--border)">
+          <div style="padding:6px 16px 4px;background:var(--surface)">
+            <span style="font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t3)">Domain-wide</span>
+          </div>
+          ${tokenPermRow(`All mailboxes + contacts in ${escapeHtml(domain.domain)}`, 'domain', domain.id, token.id, permMap.get(`domain:${domain.id}`) ?? null)}
+        </div>
+
+        ${domainMailboxes.length ? `
+        <div style="border-bottom:1px solid var(--border)">
+          <div style="padding:6px 16px 4px;background:var(--surface)">
+            <span style="font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t3)">Mailboxes</span>
+          </div>
+          ${mailboxRows}
+        </div>` : ''}
+
+        <div>
+          <div style="padding:6px 16px 4px;background:var(--surface)">
+            <span style="font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t3)">Contacts</span>
+          </div>
+          ${tokenPermRow('Contacts & organizations', 'contacts', domain.id, token.id, permMap.get(`contacts:${domain.id}`) ?? null)}
+        </div>
+      </div>`
+  }).join('')
+
+  return `
+    <div class="page-wrap" style="max-width:680px">
+      <a href="/settings/tokens" hx-boost="true" class="page-back">← API Tokens</a>
+
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+        <div>
+          <p style="font-size:16px;font-weight:600;color:var(--t1)">${escapeHtml(token.name)}</p>
+          <p style="font-size:12.5px;color:var(--t3)">Owned by ${escapeHtml(token.user_email)}</p>
+        </div>
+      </div>
+
+      ${scopedToggle}
+      ${notScopedBanner}
+
+      <p class="section-title">Explicit grants</p>
+      <p style="font-size:12px;color:var(--t3);margin-bottom:16px">
+        These grants are only enforced when the token is in scoped mode. Scoped tokens are never admin.
+      </p>
+
+      ${domains.length ? domainSections : '<p style="font-size:13px;color:var(--t3)">No domains configured yet.</p>'}
     </div>`
 }

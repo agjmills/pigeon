@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -765,4 +765,49 @@ export async function getApiTokensForUser(db: D1Database, userEmail: string): Pr
 
 export async function deleteApiToken(db: D1Database, id: number, userEmail: string): Promise<void> {
   await db.prepare('DELETE FROM api_tokens WHERE id = ? AND user_email = ?').bind(id, userEmail).run()
+}
+
+export async function getApiTokenById(db: D1Database, id: number): Promise<ApiToken | null> {
+  return db.prepare('SELECT * FROM api_tokens WHERE id = ?').bind(id).first<ApiToken>()
+}
+
+export async function setApiTokenScoped(db: D1Database, id: number, scoped: boolean): Promise<void> {
+  await db.prepare('UPDATE api_tokens SET scoped = ? WHERE id = ?').bind(scoped ? 1 : 0, id).run()
+}
+
+export async function getApiTokenPermissions(db: D1Database, tokenId: number): Promise<ApiTokenPermission[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM api_token_permissions WHERE token_id = ? ORDER BY resource_type, resource_id')
+    .bind(tokenId)
+    .all<ApiTokenPermission>()
+  return results
+}
+
+export async function addApiTokenPermission(
+  db: D1Database,
+  tokenId: number,
+  resourceType: ResourceType,
+  resourceId: number,
+  level: PermissionLevel
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT INTO api_token_permissions (token_id, resource_type, resource_id, level)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(token_id, resource_type, resource_id) DO UPDATE SET level = excluded.level
+    `)
+    .bind(tokenId, resourceType, resourceId, level)
+    .run()
+}
+
+export async function removeApiTokenPermission(
+  db: D1Database,
+  tokenId: number,
+  resourceType: ResourceType,
+  resourceId: number
+): Promise<void> {
+  await db
+    .prepare('DELETE FROM api_token_permissions WHERE token_id = ? AND resource_type = ? AND resource_id = ?')
+    .bind(tokenId, resourceType, resourceId)
+    .run()
 }

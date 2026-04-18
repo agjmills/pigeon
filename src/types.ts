@@ -12,10 +12,16 @@ export type Bindings = {
   CF_EMAIL_TOKEN: string
 }
 
+export type PermissionGrant = {
+  resource_type: ResourceType
+  resource_id: number
+  level: PermissionLevel
+}
+
 export type Variables = {
   user: SessionUser
   isAdmin: boolean
-  permissions: UserPermission[]
+  permissions: PermissionGrant[]
 }
 
 export type AppEnv = {
@@ -145,6 +151,15 @@ export type ApiToken = {
   token_hash: string
   name: string
   user_email: string
+  scoped: number
   created_at: number
   last_used_at: number | null
+}
+
+export type ApiTokenPermission = {
+  id: number
+  token_id: number
+  resource_type: ResourceType
+  resource_id: number
+  level: PermissionLevel
 }

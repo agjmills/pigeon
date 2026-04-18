@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 import { getCookie } from 'hono/cookie'
 import type { AppEnv } from '../types'
-import { getUserByEmail, getUserPermissions, getApiTokenByRaw, touchApiToken } from '../lib/db'
+import { getUserByEmail, getUserPermissions, getApiTokenByRaw, getApiTokenPermissions, touchApiToken } from '../lib/db'
 
 const NO_ACCESS_PAGE = `<!DOCTYPE html>
 <html lang="en">
@@ -38,15 +38,18 @@ export const authMiddleware = createMiddleware<AppEnv>(async (c, next) => {
     const apiToken = await getApiTokenByRaw(c.env.DB, rawToken)
     if (!apiToken) return c.json({ error: 'Invalid or revoked API token' }, 401)
 
-    const [user, permissions] = await Promise.all([
-      getUserByEmail(c.env.DB, apiToken.user_email),
-      getUserPermissions(c.env.DB, apiToken.user_email),
-    ])
+    const user = await getUserByEmail(c.env.DB, apiToken.user_email)
     if (!user) return c.json({ error: 'Token owner not found' }, 401)
 
+    // Scoped tokens use their own permission set; unscoped tokens inherit the owner's permissions
+    const permissions = apiToken.scoped
+      ? await getApiTokenPermissions(c.env.DB, apiToken.id)
+      : await getUserPermissions(c.env.DB, apiToken.user_email)
+    const isAdmin = apiToken.scoped ? false : user.is_admin === 1
+
     c.executionCtx.waitUntil(touchApiToken(c.env.DB, apiToken.id))
-    c.set('user', { email: user.email, name: user.name ?? user.email, isAdmin: user.is_admin === 1 })
-    c.set('isAdmin', user.is_admin === 1)
+    c.set('user', { email: user.email, name: user.name ?? user.email, isAdmin })
+    c.set('isAdmin', isAdmin)
     c.set('permissions', permissions)
     await next()
     return

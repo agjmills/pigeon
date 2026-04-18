@@ -1,4 +1,4 @@
-import type { Mailbox, PermissionLevel, UserPermission } from '../types'
+import type { Mailbox, PermissionLevel, PermissionGrant } from '../types'
 
 function highest(a: PermissionLevel | null, b: PermissionLevel | null): PermissionLevel | null {
   if (a === 'edit' || b === 'edit') return 'edit'
@@ -7,7 +7,7 @@ function highest(a: PermissionLevel | null, b: PermissionLevel | null): Permissi
 }
 
 export function effectiveMailboxLevel(
-  permissions: UserPermission[],
+  permissions: PermissionGrant[],
   isAdmin: boolean,
   mailboxId: number,
   domainId: number
@@ -26,7 +26,7 @@ export function effectiveMailboxLevel(
 }
 
 export function effectiveContactsLevel(
-  permissions: UserPermission[],
+  permissions: PermissionGrant[],
   isAdmin: boolean,
   domainId: number
 ): PermissionLevel | null {
@@ -46,7 +46,7 @@ export function effectiveContactsLevel(
 // Returns the highest contacts access the user has across any domain.
 // Used for routes not yet scoped to a specific domain.
 export function anyContactsLevel(
-  permissions: UserPermission[],
+  permissions: PermissionGrant[],
   isAdmin: boolean
 ): PermissionLevel | null {
   if (isAdmin) return 'edit'
@@ -60,7 +60,7 @@ export function anyContactsLevel(
 }
 
 export function canSendFrom(
-  permissions: UserPermission[],
+  permissions: PermissionGrant[],
   isAdmin: boolean,
   mailboxId: number,
   domainId: number
@@ -69,7 +69,7 @@ export function canSendFrom(
 }
 
 export function canReadMailbox(
-  permissions: UserPermission[],
+  permissions: PermissionGrant[],
   isAdmin: boolean,
   mailboxId: number,
   domainId: number
@@ -78,7 +78,7 @@ export function canReadMailbox(
 }
 
 export function accessibleMailboxIds(
-  permissions: UserPermission[],
+  permissions: PermissionGrant[],
   isAdmin: boolean,
   allMailboxes: Mailbox[]
 ): number[] {
