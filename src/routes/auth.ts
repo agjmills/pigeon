@@ -71,6 +71,25 @@ function errorPage(message: string): string {
 }
 
 authRoutes.get('/login', async (c) => {
+  // Dev-only bypass: set DEV_EMAIL in wrangler.local.toml (gitignored), never in wrangler.toml
+  if (c.env.DEV_EMAIL) {
+    const sessionToken = await generateToken()
+    const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7
+    await c.env.DB
+      .prepare('INSERT INTO sessions (token, user_email, user_name, expires_at) VALUES (?, ?, ?, ?)')
+      .bind(sessionToken, c.env.DEV_EMAIL, c.env.DEV_EMAIL, expiresAt)
+      .run()
+    await upsertUser(c.env.DB, c.env.DEV_EMAIL, c.env.DEV_EMAIL)
+    if (!await hasAnyAdmin(c.env.DB)) {
+      await setUserAdmin(c.env.DB, c.env.DEV_EMAIL, true)
+    }
+    // No `secure` flag — wrangler dev serves over HTTP
+    setCookie(c, 'session', sessionToken, {
+      httpOnly: true, sameSite: 'Lax', maxAge: 60 * 60 * 24 * 7, path: '/',
+    })
+    return c.redirect('/')
+  }
+
   const oidc = await discoverOIDC(c.env.OIDC_ISSUER)
   const { verifier, challenge } = await generatePKCE()
   const state = await generateToken()

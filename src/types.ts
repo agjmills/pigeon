@@ -12,6 +12,7 @@ export type Bindings = {
   CF_EMAIL_TOKEN: string
   UNSUBSCRIBE_SECRET?: string
   RATE_LIMITER?: RateLimit
+  DEV_EMAIL?: string
 }
 
 export type PermissionGrant = {
