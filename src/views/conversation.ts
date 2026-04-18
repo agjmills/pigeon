@@ -98,6 +98,7 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
               ${escapeHtml(msg.from_name || msg.from_email)}
             </span>
             <span style="font-size:11.5px;color:var(--t3)">${formatDate(msg.created_at)}</span>
+            ${isOut && msg.opened_at ? openedBadge(msg.opened_at) : ''}
           </div>
           <div class="bubble ${isOut ? 'bubble-out' : 'bubble-in'}">${body}</div>
         </div>
@@ -125,6 +126,10 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
           </form>
         </div>`}
     </div>`
+}
+
+function openedBadge(openedAt: number): string {
+  return `<span style="font-size:11px;color:var(--success)" title="Opened ${formatDate(openedAt)}">Opened</span>`
 }
 
 function renderBody(msg: Message): string {
