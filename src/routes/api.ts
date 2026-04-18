@@ -1,14 +1,46 @@
 import { Hono } from 'hono'
 import type { AppEnv } from '../types'
 import {
-  getAllCustomers, getCustomerById, getConversationsByCustomer,
-  getConversation, getMessages, getMailboxes, getConversations,
+  getAllCustomers, getCustomerById, getCustomerByEmail, getConversationsByCustomer,
+  getConversation, getMessages, getMailboxes, getConversationsPaginated,
   createMessage, createConversation, getLastMessageId, createAuditEntry,
+  upsertCustomer, setCustomerOptedOut, setConversationStatus,
+  insertMessageAttachment,
 } from '../lib/db'
 import { canReadMailbox, canSendFrom, anyContactsLevel } from '../lib/permissions'
 import { createEmailProvider } from '../lib/email-provider'
+import type { EmailAttachment } from '../lib/email-provider'
 
 export const apiRoutes = new Hono<AppEnv>()
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+apiRoutes.use('/*', async (c, next) => {
+  if (c.env.RATE_LIMITER) {
+    const key = c.req.header('authorization') ?? c.req.header('x-forwarded-for') ?? 'anon'
+    const { success } = await c.env.RATE_LIMITER.limit({ key })
+    if (!success) {
+      return c.json({ error: 'Rate limit exceeded' }, 429, { 'Retry-After': '60' })
+    }
+  }
+  return next()
+})
+
+// ── Mailboxes ─────────────────────────────────────────────────────────────────
+
+apiRoutes.get('/mailboxes', async (c) => {
+  const mailboxes = await getMailboxes(c.env.DB)
+  const accessible = mailboxes.filter(mb =>
+    mb.domain_id !== null &&
+    canSendFrom(c.get('permissions'), c.get('isAdmin'), mb.id, mb.domain_id)
+  )
+  return c.json(accessible.map(mb => ({
+    id: mb.id,
+    email: mb.email,
+    sender_name: mb.sender_name,
+    domain_id: mb.domain_id,
+  })))
+})
 
 // ── Customers ─────────────────────────────────────────────────────────────────
 
@@ -16,8 +48,32 @@ apiRoutes.get('/customers', async (c) => {
   if (!anyContactsLevel(c.get('permissions'), c.get('isAdmin'))) {
     return c.json({ error: 'Forbidden' }, 403)
   }
+
+  const email = c.req.query('email')
+  if (email) {
+    const customer = await getCustomerByEmail(c.env.DB, email)
+    if (!customer) return c.json({ error: 'Not found' }, 404)
+    return c.json(customer)
+  }
+
   const customers = await getAllCustomers(c.env.DB)
   return c.json(customers)
+})
+
+apiRoutes.post('/customers', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+  const body = await c.req.json<{ email?: string; name?: string; notes?: string }>().catch(() => null)
+  if (!body?.email) return c.json({ error: 'email is required' }, 400)
+
+  const { id, created } = await upsertCustomer(c.env.DB, {
+    email: body.email,
+    name: body.name ?? null,
+    notes: body.notes ?? null,
+  })
+  const customer = await getCustomerById(c.env.DB, id)
+  return c.json({ id, email: customer!.email, created }, created ? 201 : 200)
 })
 
 apiRoutes.get('/customers/:id', async (c) => {
@@ -38,29 +94,59 @@ apiRoutes.get('/customers/:id', async (c) => {
   return c.json({ customer, conversations, total, page, status })
 })
 
+// ── Customer opt-out / opt-in ──────────────────────────────────────────────────
+
+apiRoutes.post('/customers/:id/opt-out', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+  const id = parseInt(c.req.param('id'))
+  const customer = await getCustomerById(c.env.DB, id)
+  if (!customer) return c.json({ error: 'Not found' }, 404)
+  await setCustomerOptedOut(c.env.DB, id, true)
+  return c.json({ ok: true })
+})
+
+apiRoutes.post('/customers/:id/opt-in', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+  const id = parseInt(c.req.param('id'))
+  const customer = await getCustomerById(c.env.DB, id)
+  if (!customer) return c.json({ error: 'Not found' }, 404)
+  await setCustomerOptedOut(c.env.DB, id, false)
+  return c.json({ ok: true })
+})
+
 // ── Conversations ─────────────────────────────────────────────────────────────
 
 apiRoutes.get('/conversations', async (c) => {
   const mailboxes = await getMailboxes(c.env.DB)
   const status = c.req.query('status') ?? 'open'
   const mailboxEmail = c.req.query('mailbox')
+  const since = c.req.query('since') ? parseInt(c.req.query('since')!) : undefined
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1') || 1)
+  const perPage = Math.min(200, parseInt(c.req.query('per_page') ?? '50') || 50)
 
   const accessible = mailboxes.filter(mb =>
     mb.domain_id !== null &&
     canReadMailbox(c.get('permissions'), c.get('isAdmin'), mb.id, mb.domain_id)
   )
-  if (!accessible.length) return c.json([])
+  if (!accessible.length) return c.json({ conversations: [], total: 0, page })
 
   const filterMailbox = mailboxEmail
     ? accessible.find(mb => mb.email === mailboxEmail)
     : null
   if (mailboxEmail && !filterMailbox) return c.json({ error: 'Forbidden or not found' }, 403)
 
-  const conversations = await getConversations(c.env.DB, {
+  const { conversations, total } = await getConversationsPaginated(c.env.DB, {
     mailbox: filterMailbox?.email,
     status,
+    since,
+    limit: perPage,
+    offset: (page - 1) * perPage,
   })
-  return c.json(conversations)
+  return c.json({ conversations, total, page })
 })
 
 apiRoutes.get('/conversations/:id', async (c) => {
@@ -80,11 +166,49 @@ apiRoutes.get('/conversations/:id', async (c) => {
   return c.json({ conversation: conv, messages })
 })
 
+apiRoutes.post('/conversations/:id/close', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const [conv, mailboxes] = await Promise.all([
+    getConversation(c.env.DB, id),
+    getMailboxes(c.env.DB),
+  ])
+  if (!conv) return c.json({ error: 'Not found' }, 404)
+
+  const mb = mailboxes.find(m => m.email === conv.mailbox_email)
+  if (!canSendFrom(c.get('permissions'), c.get('isAdmin'), mb?.id ?? -1, mb?.domain_id ?? -1)) {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+
+  await setConversationStatus(c.env.DB, id, 'closed')
+  return c.json({ ok: true })
+})
+
+apiRoutes.post('/conversations/:id/open', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const [conv, mailboxes] = await Promise.all([
+    getConversation(c.env.DB, id),
+    getMailboxes(c.env.DB),
+  ])
+  if (!conv) return c.json({ error: 'Not found' }, 404)
+
+  const mb = mailboxes.find(m => m.email === conv.mailbox_email)
+  if (!canSendFrom(c.get('permissions'), c.get('isAdmin'), mb?.id ?? -1, mb?.domain_id ?? -1)) {
+    return c.json({ error: 'Forbidden' }, 403)
+  }
+
+  await setConversationStatus(c.env.DB, id, 'open')
+  return c.json({ ok: true })
+})
+
 // ── Reply ─────────────────────────────────────────────────────────────────────
 
 apiRoutes.post('/conversations/:id/reply', async (c) => {
   const id = parseInt(c.req.param('id'))
-  const body = await c.req.json<{ text: string; html?: string }>().catch(() => null)
+  const body = await c.req.json<{
+    text: string
+    html?: string
+    attachments?: Array<{ filename: string; content_base64: string; mime_type: string }>
+  }>().catch(() => null)
   if (!body?.text) return c.json({ error: 'body.text is required' }, 400)
 
   const [conv, mailboxes] = await Promise.all([
@@ -99,8 +223,13 @@ apiRoutes.post('/conversations/:id/reply', async (c) => {
     return c.json({ error: 'Forbidden' }, 403)
   }
 
+  const customer = await getCustomerByEmail(c.env.DB, conv.customer_email)
+  if (customer?.opted_out_at) return c.json({ error: 'Customer has opted out' }, 409)
+  if (customer?.bounced_at) return c.json({ error: 'Email address has bounced' }, 409)
+
   const user = c.get('user')
   const inReplyTo = await getLastMessageId(c.env.DB, id)
+  const emailAttachments = decodeBase64Attachments(body.attachments)
   const trackingToken = crypto.randomUUID()
   const pixelUrl = `${c.env.APP_URL}/t/${trackingToken}`
   const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="">`
@@ -115,6 +244,7 @@ apiRoutes.post('/conversations/:id/reply', async (c) => {
     text: body.text,
     html: htmlBody,
     inReplyTo,
+    attachments: emailAttachments.length ? emailAttachments : undefined,
   })
 
   const msgId = await createMessage(c.env.DB, {
@@ -130,6 +260,10 @@ apiRoutes.post('/conversations/:id/reply', async (c) => {
     in_reply_to: inReplyTo,
     tracking_token: trackingToken,
   })
+
+  if (emailAttachments.length) {
+    c.executionCtx.waitUntil(storeApiAttachments(c.env, msgId, emailAttachments))
+  }
 
   c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
     user_email: user.email,
@@ -152,6 +286,7 @@ apiRoutes.post('/compose', async (c) => {
     subject: string
     text: string
     html?: string
+    attachments?: Array<{ filename: string; content_base64: string; mime_type: string }>
   }>().catch(() => null)
 
   if (!body?.from || !body?.to || !body?.subject || !body?.text) {
@@ -165,7 +300,12 @@ apiRoutes.post('/compose', async (c) => {
     return c.json({ error: 'Forbidden' }, 403)
   }
 
+  const customer = await getCustomerByEmail(c.env.DB, body.to)
+  if (customer?.opted_out_at) return c.json({ error: 'Customer has opted out' }, 409)
+  if (customer?.bounced_at) return c.json({ error: 'Email address has bounced' }, 409)
+
   const user = c.get('user')
+  const emailAttachments = decodeBase64Attachments(body.attachments)
   const trackingToken = crypto.randomUUID()
   const pixelUrl = `${c.env.APP_URL}/t/${trackingToken}`
   const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="">`
@@ -179,6 +319,7 @@ apiRoutes.post('/compose', async (c) => {
     subject: body.subject,
     text: body.text,
     html: htmlBody,
+    attachments: emailAttachments.length ? emailAttachments : undefined,
   })
 
   const convId = await createConversation(c.env.DB, {
@@ -200,6 +341,10 @@ apiRoutes.post('/compose', async (c) => {
     tracking_token: trackingToken,
   })
 
+  if (emailAttachments.length) {
+    c.executionCtx.waitUntil(storeApiAttachments(c.env, msgId, emailAttachments))
+  }
+
   c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
     user_email: user.email,
     user_name: user.name,
@@ -211,6 +356,38 @@ apiRoutes.post('/compose', async (c) => {
 
   return c.json({ ok: true, conversation_id: convId, message_id: msgId }, 201)
 })
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function decodeBase64Attachments(
+  raw?: Array<{ filename: string; content_base64: string; mime_type: string }>
+): EmailAttachment[] {
+  if (!raw?.length) return []
+  return raw.map(a => {
+    const binary = atob(a.content_base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return { filename: a.filename, content: bytes, contentType: a.mime_type }
+  })
+}
+
+async function storeApiAttachments(
+  env: import('../types').Bindings,
+  msgId: number,
+  attachments: EmailAttachment[]
+): Promise<void> {
+  for (const att of attachments) {
+    const r2Key = `attachments/${msgId}/${crypto.randomUUID()}-${att.filename}`
+    await env.ATTACHMENTS.put(r2Key, att.content)
+    await insertMessageAttachment(env.DB, {
+      message_id: msgId,
+      filename: att.filename,
+      mime_type: att.contentType,
+      size: att.content.byteLength,
+      r2_key: r2Key,
+    })
+  }
+}
 
 // ── OpenAPI spec ──────────────────────────────────────────────────────────────
 
@@ -244,7 +421,17 @@ components:
         email: { type: string }
         name: { type: string, nullable: true }
         notes: { type: string, nullable: true }
+        opted_out_at: { type: integer, nullable: true, description: Unix timestamp when customer opted out }
+        bounced_at: { type: integer, nullable: true, description: Unix timestamp when a hard bounce was detected }
         created_at: { type: integer, description: Unix timestamp }
+
+    Mailbox:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }
+        sender_name: { type: string, nullable: true }
+        domain_id: { type: integer, nullable: true }
 
     Conversation:
       type: object
@@ -274,18 +461,75 @@ components:
         created_at: { type: integer }
 
 paths:
-  /customers:
+  /mailboxes:
     get:
-      summary: List all customers
-      operationId: listCustomers
+      summary: List mailboxes the token can send from
+      operationId: listMailboxes
       responses:
         '200':
-          description: Array of customers
+          description: Array of accessible mailboxes
           content:
             application/json:
               schema:
                 type: array
-                items: { \$ref: '#/components/schemas/Customer' }
+                items: { \$ref: '#/components/schemas/Mailbox' }
+
+  /customers:
+    get:
+      summary: List all customers, or look up by email
+      operationId: listCustomers
+      parameters:
+        - name: email
+          in: query
+          description: Exact-match email lookup — returns single customer or 404
+          schema: { type: string }
+      responses:
+        '200':
+          description: Array of customers (or single customer when email param provided)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items: { \$ref: '#/components/schemas/Customer' }
+                  - \$ref: '#/components/schemas/Customer'
+        '404':
+          description: Customer not found (only when email param provided)
+    post:
+      summary: Create or return existing customer (upsert by email)
+      operationId: upsertCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+                name: { type: string }
+                notes: { type: string }
+      responses:
+        '200':
+          description: Existing customer returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  email: { type: string }
+                  created: { type: boolean, example: false }
+        '201':
+          description: New customer created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  email: { type: string }
+                  created: { type: boolean, example: true }
 
   /customers/{id}:
     get:
@@ -318,6 +562,44 @@ paths:
                   page: { type: integer }
                   status: { type: string }
 
+  /customers/{id}/opt-out:
+    post:
+      summary: Mark customer as opted out
+      operationId: optOutCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  /customers/{id}/opt-in:
+    post:
+      summary: Clear customer opt-out status
+      operationId: optInCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
   /conversations:
     get:
       summary: List conversations
@@ -330,14 +612,29 @@ paths:
           in: query
           schema: { type: string }
           description: Filter by mailbox email address
+        - name: since
+          in: query
+          schema: { type: integer }
+          description: Unix timestamp — only return conversations with last_message_at after this value
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
       responses:
         '200':
-          description: Array of conversations
+          description: Paginated conversations
           content:
             application/json:
               schema:
-                type: array
-                items: { \$ref: '#/components/schemas/Conversation' }
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items: { \$ref: '#/components/schemas/Conversation' }
+                  total: { type: integer }
+                  page: { type: integer }
 
   /conversations/{id}:
     get:
@@ -394,6 +691,46 @@ paths:
                 properties:
                   ok: { type: boolean }
                   message_id: { type: integer }
+        '409':
+          description: Customer has opted out or email has bounced
+
+  /conversations/{id}/close:
+    post:
+      summary: Close a conversation
+      operationId: closeConversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+
+  /conversations/{id}/open:
+    post:
+      summary: Reopen a conversation
+      operationId: openConversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
 
   /compose:
     post:
@@ -432,6 +769,8 @@ paths:
                   ok: { type: boolean }
                   conversation_id: { type: integer }
                   message_id: { type: integer }
+        '409':
+          description: Customer has opted out or email has bounced
 `
   return c.text(spec, 200, { 'Content-Type': 'application/yaml' })
 })
