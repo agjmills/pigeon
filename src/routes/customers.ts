@@ -7,6 +7,7 @@ import {
   getConversation, getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
   getAllCustomers, getOrganizationsForCustomer, getAllOrganizations,
   addCustomerToOrganization, removeCustomerFromOrganization,
+  setCustomerOptedOut,
 } from '../lib/db'
 import { layout, escapeHtml, formatDate } from '../views/layout'
 
@@ -110,6 +111,14 @@ customerRoutes.post('/:id/organizations/:orgId/remove', async (c) => {
   return c.redirect(`/customers/${id}`)
 })
 
+// Opt customer back in
+customerRoutes.post('/:id/opt-in', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
+  const id = parseInt(c.req.param('id'))
+  await setCustomerOptedOut(c.env.DB, id, false)
+  return c.redirect(`/customers/${id}`)
+})
+
 function customersListView(customers: Customer[]): string {
   const rows = customers.map(c => `
     <a href="/customers/${c.id}" hx-boost="true" class="row-item" style="text-decoration:none;gap:12px">
@@ -189,9 +198,24 @@ function customerView(
                    onmouseout="if(document.activeElement!==this)this.style.borderBottomColor='transparent'"
                    onfocus="this.style.borderBottomColor='var(--accent)'"
                    onblur="this.style.borderBottomColor='transparent'">
-            <p style="font-size:13px;color:var(--t2)">${escapeHtml(customer.email)}</p>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <p style="font-size:13px;color:var(--t2);margin:0">${escapeHtml(customer.email)}</p>
+              ${customer.opted_out_at ? `<span style="font-size:11px;font-weight:500;padding:2px 7px;border-radius:4px;background:rgba(220,38,38,.1);color:#dc2626">Opted out</span>` : ''}
+              ${customer.bounced_at ? `<span style="font-size:11px;font-weight:500;padding:2px 7px;border-radius:4px;background:rgba(234,88,12,.1);color:#ea580c">Bounced</span>` : ''}
+            </div>
           </div>
         </div>
+        ${customer.opted_out_at ? `
+        <div style="margin-top:12px;padding:10px 14px;border-radius:6px;background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.2);display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <p style="font-size:13px;color:#dc2626;margin:0">This contact has opted out of emails and will not receive new messages.</p>
+          <form method="POST" action="/customers/${customer.id}/opt-in" style="flex-shrink:0">
+            <button type="submit" class="btn btn-secondary btn-sm">Re-subscribe</button>
+          </form>
+        </div>` : ''}
+        ${customer.bounced_at ? `
+        <div style="margin-top:12px;padding:10px 14px;border-radius:6px;background:rgba(234,88,12,.06);border:1px solid rgba(234,88,12,.2)">
+          <p style="font-size:13px;color:#ea580c;margin:0">Emails to this address have bounced. New messages are blocked.</p>
+        </div>` : ''}
 
         <div class="mt-6">
           <label class="section-title" style="display:block;margin-bottom:8px">Notes</label>

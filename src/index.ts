@@ -9,6 +9,8 @@ import { tagRoutes } from './routes/tags'
 import { auditRoutes } from './routes/audit'
 import { settingsRoutes } from './routes/settings'
 import { apiRoutes } from './routes/api'
+import { unsubscribeRoutes } from './routes/unsubscribe'
+import { attachmentRoutes } from './routes/attachments'
 import { authMiddleware } from './middleware/auth'
 import { emailHandler } from './email-handler'
 import { trackingRoutes } from './routes/tracking'
@@ -18,6 +20,7 @@ const app = new Hono<AppEnv>()
 // Public routes
 app.route('/auth', authRoutes)
 app.route('/t', trackingRoutes)
+app.route('/unsubscribe', unsubscribeRoutes)
 
 // All other routes require a session
 app.use('/*', authMiddleware)
@@ -29,6 +32,7 @@ app.route('/tags', tagRoutes)
 app.route('/audit', auditRoutes)
 app.route('/settings', settingsRoutes)
 app.route('/api/v1', apiRoutes)
+app.route('/attachments', attachmentRoutes)
 
 export default {
   fetch: app.fetch,
