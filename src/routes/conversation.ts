@@ -1,3 +1,4 @@
+import { accessibleMailboxIds, canReadMailbox, canSendFrom } from '../lib/permissions'
 import { Hono } from 'hono'
 import type { AppEnv } from '../types'
 import {
@@ -6,6 +7,7 @@ import {
   getCustomerById, linkConversationToCustomer, createCustomer,
   markConversationRead, saveAiSummary,
   getTagsForConversation, getAllTags, addTagToConversation, removeTagFromConversation,
+  createAuditEntry,
 } from '../lib/db'
 import { createEmailProvider } from '../lib/email-provider'
 import { layout } from '../views/layout'
@@ -30,12 +32,18 @@ conversationRoutes.get('/:id', async (c) => {
 
   if (!conv) return c.notFound()
 
+  const mb = mailboxes.find(m => m.email === conv.mailbox_email)
+  if (!canReadMailbox(c.get('permissions'), c.get('isAdmin'), mb?.id ?? -1, mb?.domain_id ?? -1)) {
+    return c.text('Forbidden', 403)
+  }
+
   if (conv.unread) await markConversationRead(c.env.DB, id)
 
   const customer = conv.customer_id ? await getCustomerById(c.env.DB, conv.customer_id) : null
 
   return c.html(layout(conversationView(conv, messages, customer, tags, allTags), {
-    user, mailboxes, domains, counts, unreadCounts,
+    user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes),
+    domains, counts, unreadCounts,
     activeMailbox: conv.mailbox_email,
     title: conv.subject,
   }))
@@ -58,9 +66,20 @@ conversationRoutes.post('/:id/reply', async (c) => {
   if (!conv) return c.notFound()
   if (conv.status === 'closed') return c.text('Conversation is closed', 400)
 
+  const user = c.get('user')
+  const mailbox = mailboxes.find(mb => mb.email === conv.mailbox_email)
+  if (!canSendFrom(c.get('permissions'), c.get('isAdmin'), mailbox?.id ?? -1, mailbox?.domain_id ?? -1)) {
+    return c.text('Forbidden: you do not have permission to send from this mailbox', 403)
+  }
+
   const inReplyTo = await getLastMessageId(c.env.DB, id)
 
-  const mailbox = mailboxes.find(mb => mb.email === conv.mailbox_email)
+  const trackingToken = crypto.randomUUID()
+  const pixelUrl = `${c.env.APP_URL}/t/${trackingToken}`
+  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="">`
+
+  const htmlWithPixel = bodyHtml ? bodyHtml + pixel : null
+
   const emailProvider = createEmailProvider(c.env)
   const { messageId } = await emailProvider.send({
     from: conv.mailbox_email,
@@ -68,11 +87,10 @@ conversationRoutes.post('/:id/reply', async (c) => {
     to: conv.customer_email,
     subject: conv.subject,
     text: bodyText || bodyHtml.replace(/<[^>]*>/g, ''),
-    html: bodyHtml || null,
+    html: htmlWithPixel,
     inReplyTo,
   })
 
-  const user = c.get('user')
   await createMessage(c.env.DB, {
     conversation_id: id,
     direction: 'outbound',
@@ -84,7 +102,17 @@ conversationRoutes.post('/:id/reply', async (c) => {
     body_html: bodyHtml || null,
     message_id: messageId,
     in_reply_to: inReplyTo,
+    tracking_token: trackingToken,
   })
+
+  c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
+    user_email: user.email,
+    user_name: user.name,
+    action: 'reply_sent',
+    conversation_id: id,
+    mailbox_email: conv.mailbox_email,
+    metadata: { to: conv.customer_email, subject: conv.subject },
+  }))
 
   const [updatedConv, updatedMessages] = await Promise.all([
     getConversation(c.env.DB, id),
@@ -187,6 +215,14 @@ conversationRoutes.post('/:id/note', async (c) => {
   if (!conv) return c.notFound()
 
   const user = c.get('user')
+  c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
+    user_email: user.email,
+    user_name: user.name,
+    action: 'note_added',
+    conversation_id: id,
+    mailbox_email: conv.mailbox_email,
+  }))
+
   await createMessage(c.env.DB, {
     conversation_id: id,
     direction: 'note',

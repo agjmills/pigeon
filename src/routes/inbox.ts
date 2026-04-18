@@ -1,3 +1,4 @@
+import { accessibleMailboxIds, canReadMailbox, canSendFrom } from '../lib/permissions'
 import { Hono } from 'hono'
 import type { AppEnv, Domain } from '../types'
 import {
@@ -9,6 +10,7 @@ import {
   createMailbox, updateMailboxCfRuleId, updateMailboxSenderName, getMailboxesByDomain, deleteDomain,
   createConversation, createMessage,
   searchConversations, getConversationsByTag, getTagsForConversations, getTagById,
+  createAuditEntry,
 } from '../lib/db'
 import {
   getZoneId, createDnsRecord, deleteDnsRecord,
@@ -34,6 +36,17 @@ inboxRoutes.get('/', async (c) => {
     getDomains(c.env.DB),
   ])
 
+  const permissions = c.get('permissions')
+  const isAdmin = c.get('isAdmin')
+  const allowedIds = accessibleMailboxIds(permissions, isAdmin, mailboxes)
+  // If filtering to a specific mailbox, verify access first
+  if (mailbox) {
+    const mb = mailboxes.find(m => m.email === mailbox)
+    if (!canReadMailbox(permissions, isAdmin, mb?.id ?? -1, mb?.domain_id ?? -1)) {
+      return c.text('Forbidden', 403)
+    }
+  }
+
   let conversations
   let tagName: string | undefined
   if (search) {
@@ -46,11 +59,19 @@ inboxRoutes.get('/', async (c) => {
     conversations = await getConversations(c.env.DB, { mailbox, status })
   }
 
+  // Filter conversations to only those in accessible mailboxes
+  if (!isAdmin) {
+    conversations = conversations.filter(conv => {
+      const mb = mailboxes.find(m => m.email === conv.mailbox_email)
+      return mb && allowedIds.includes(mb.id)
+    })
+  }
+
   const convIds = conversations.map(c => c.id)
   const tagsByConv = await getTagsForConversations(c.env.DB, convIds)
 
   const content = inboxView(conversations, { mailbox, status, search, tag: tagFilter?.toString(), tagName }, tagsByConv)
-  return c.html(layout(content, { user, mailboxes, counts, unreadCounts, domains, activeMailbox: mailbox }))
+  return c.html(layout(content, { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, activeMailbox: mailbox }))
 })
 
 // ── Add mailbox ───────────────────────────────────────────────────────────────
@@ -64,7 +85,7 @@ inboxRoutes.get('/mailboxes/new', async (c) => {
     getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
-  return c.html(layout(mailboxForm({ domains, selectedDomainId: domainId }), { user, mailboxes, counts, unreadCounts, domains, title: 'Add mailbox' }))
+  return c.html(layout(mailboxForm({ domains, selectedDomainId: domainId }), { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: 'Add mailbox' }))
 })
 
 inboxRoutes.post('/mailboxes', async (c) => {
@@ -167,7 +188,7 @@ inboxRoutes.post('/mailboxes', async (c) => {
   if (cfError) {
     return c.html(layout(
       mailboxForm({ error: `Mailbox saved but setup failed: ${cfError}`, domains, localPart, name }),
-      { user, mailboxes, counts, unreadCounts, domains, title: 'Add mailbox' }
+      { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: 'Add mailbox' }
     ))
   }
 
@@ -192,7 +213,7 @@ inboxRoutes.get('/mailboxes/:id/edit', async (c) => {
 
   return c.html(layout(
     editMailboxForm(mailbox.id, mailbox.name, mailbox.email, mailbox.sender_name),
-    { user, mailboxes, counts, unreadCounts, domains, title: 'Edit mailbox' }
+    { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: 'Edit mailbox' }
   ))
 })
 
@@ -260,7 +281,7 @@ inboxRoutes.get('/domains/:id', async (c) => {
 
   return c.html(layout(
     domainSettingsView(domain, mailboxes, counts),
-    { user, mailboxes: allMailboxes, counts, unreadCounts, domains, title: `${domain.domain} settings` }
+    { user, mailboxes: allMailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: `${domain.domain} settings` }
   ))
 })
 
@@ -342,13 +363,21 @@ inboxRoutes.post('/domains/:id/delete', async (c) => {
 inboxRoutes.get('/compose', async (c) => {
   const user = c.get('user')
   const toEmail = c.req.query('to') ?? ''
-  const [mailboxes, counts, unreadCounts, domains] = await Promise.all([
+  const [allMailboxes, counts, unreadCounts, domains] = await Promise.all([
     getMailboxes(c.env.DB),
     getMailboxCounts(c.env.DB),
     getUnreadCounts(c.env.DB),
     getDomains(c.env.DB),
   ])
-  return c.html(layout(composeForm({ mailboxes, toEmail }), { user, mailboxes, counts, unreadCounts, domains, title: 'New message' }))
+  const permissions = c.get('permissions')
+  const isAdmin = c.get('isAdmin')
+  const sendableMailboxes = allMailboxes.filter(mb =>
+    canSendFrom(permissions, isAdmin, mb.id, mb.domain_id ?? -1)
+  )
+  return c.html(layout(composeForm({ mailboxes: sendableMailboxes, toEmail }), {
+    user, mailboxes: allMailboxes, accessibleMailboxIds: accessibleMailboxIds(permissions, isAdmin, allMailboxes),
+    counts, unreadCounts, domains, title: 'New message',
+  }))
 })
 
 inboxRoutes.post('/compose', async (c) => {
@@ -366,12 +395,28 @@ inboxRoutes.post('/compose', async (c) => {
     ])
     return c.html(layout(
       composeForm({ mailboxes, toEmail: to, subject, error: 'All fields are required.' }),
-      { user, mailboxes, counts, unreadCounts, domains, title: 'New message' }
+      { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: 'New message' }
     ))
   }
 
   const mailboxes = await getMailboxes(c.env.DB)
-  const mailbox = mailboxes.find(mb => mb.email === from)
+  const fromMailbox = mailboxes.find(mb => mb.email === from)
+  if (!canSendFrom(c.get('permissions'), c.get('isAdmin'), fromMailbox?.id ?? -1, fromMailbox?.domain_id ?? -1)) {
+    const [counts, unreadCounts, domains] = await Promise.all([
+      getMailboxCounts(c.env.DB), getUnreadCounts(c.env.DB), getDomains(c.env.DB),
+    ])
+    const sendable = mailboxes.filter(mb => canSendFrom(c.get('permissions'), c.get('isAdmin'), mb.id, mb.domain_id ?? -1))
+    return c.html(layout(
+      composeForm({ mailboxes: sendable, toEmail: to, subject, error: 'You do not have permission to send from that mailbox.' }),
+      { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), counts, unreadCounts, domains, title: 'New message' }
+    ))
+  }
+  const mailbox = fromMailbox
+
+  const trackingToken = crypto.randomUUID()
+  const pixelUrl = `${c.env.APP_URL}/t/${trackingToken}`
+  const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="">`
+  const htmlWithPixel = bodyHtml ? bodyHtml + pixel : null
 
   const emailProvider = createEmailProvider(c.env)
   const { messageId } = await emailProvider.send({
@@ -380,7 +425,7 @@ inboxRoutes.post('/compose', async (c) => {
     to,
     subject,
     text: bodyText || bodyHtml.replace(/<[^>]*>/g, ''),
-    html: bodyHtml || null,
+    html: htmlWithPixel,
   })
 
   const conversationId = await createConversation(c.env.DB, {
@@ -400,7 +445,17 @@ inboxRoutes.post('/compose', async (c) => {
     body_text: bodyText || null,
     body_html: bodyHtml || null,
     message_id: messageId,
+    tracking_token: trackingToken,
   })
+
+  c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
+    user_email: user.email,
+    user_name: user.name,
+    action: 'compose_sent',
+    conversation_id: conversationId,
+    mailbox_email: from,
+    metadata: { to, subject },
+  }))
 
   return c.redirect(`/c/${conversationId}`)
 })
@@ -516,6 +571,7 @@ function editMailboxForm(id: number, name: string, email: string, senderName: st
           <a href="/" class="btn btn-secondary flex-1" style="text-align:center">Cancel</a>
         </div>
       </form>
+
       <div class="danger-zone mt-8">
         <p style="font-size:12px;font-weight:600;color:var(--danger);margin-bottom:6px">Danger zone</p>
         <p class="field-hint mb-3">
