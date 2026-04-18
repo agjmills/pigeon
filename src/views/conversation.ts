@@ -1,16 +1,16 @@
-import type { Conversation, Customer, Message, Tag } from '../types'
+import type { Conversation, Customer, Message, Tag, MessageAttachment } from '../types'
 import { escapeHtml, formatDate, tagBadge } from './layout'
 
-export function conversationView(conv: Conversation, messages: Message[], customer: Customer | null, tags: Tag[] = [], allTags: Tag[] = []): string {
+export function conversationView(conv: Conversation, messages: Message[], customer: Customer | null, tags: Tag[] = [], allTags: Tag[] = [], attachments: Record<number, MessageAttachment[]> = {}): string {
   return `
     <div id="conv-${conv.id}" style="display:flex;flex-direction:column;min-height:100%">
       ${convHeader(conv, tags, allTags)}
-      ${convBody(conv, messages, customer)}
+      ${convBody(conv, messages, customer, attachments)}
     </div>`
 }
 
-export function convBodyView(conv: Conversation, messages: Message[], customer: Customer | null): string {
-  return convBody(conv, messages, customer)
+export function convBodyView(conv: Conversation, messages: Message[], customer: Customer | null, attachments: Record<number, MessageAttachment[]> = {}): string {
+  return convBody(conv, messages, customer, attachments)
 }
 
 function convHeader(conv: Conversation, tags: Tag[] = [], allTags: Tag[] = []): string {
@@ -67,13 +67,14 @@ function convHeader(conv: Conversation, tags: Tag[] = [], allTags: Tag[] = []): 
     </div>`
 }
 
-function convBody(conv: Conversation, messages: Message[], customer: Customer | null): string {
+function convBody(conv: Conversation, messages: Message[], customer: Customer | null, attachments: Record<number, MessageAttachment[]> = {}): string {
   const isOpen = conv.status === 'open'
 
   const thread = messages.map(msg => {
     const isOut = msg.direction === 'outbound'
     const isNote = msg.direction === 'note'
     const body = renderBody(msg)
+    const msgAttachments = attachments[msg.id] ?? []
 
     if (isNote) {
       return `
@@ -101,6 +102,7 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
             ${isOut && msg.opened_at ? openedBadge(msg.opened_at) : ''}
           </div>
           <div class="bubble ${isOut ? 'bubble-out' : 'bubble-in'}">${body}</div>
+          ${msgAttachments.length ? attachmentList(msgAttachments) : ''}
         </div>
       </div>`
   }).join('\n')
@@ -130,6 +132,19 @@ function convBody(conv: Conversation, messages: Message[], customer: Customer | 
 
 function openedBadge(openedAt: number): string {
   return `<span style="font-size:11px;color:var(--success)" title="Opened ${formatDate(openedAt)}">Opened</span>`
+}
+
+function attachmentList(atts: MessageAttachment[]): string {
+  const items = atts.map(a => {
+    const size = a.size < 1024 ? `${a.size} B`
+      : a.size < 1024 * 1024 ? `${(a.size / 1024).toFixed(1)} KB`
+      : `${(a.size / 1024 / 1024).toFixed(1)} MB`
+    return `<a href="/attachments/${a.id}" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--accent);text-decoration:none;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface-2)">
+      <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 002.112 2.13" /></svg>
+      ${escapeHtml(a.filename)} <span style="color:var(--t3)">${size}</span>
+    </a>`
+  }).join('')
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${items}</div>`
 }
 
 function renderBody(msg: Message): string {
@@ -221,6 +236,7 @@ function replyForm(conv: Conversation): string {
             hx-target="div[data-conv='${conv.id}']"
             hx-swap="outerHTML"
             hx-indicator="#reply-spinner"
+            hx-encoding="multipart/form-data"
             onsubmit="document.getElementById('reply-body-html').value=document.getElementById('reply-editor').innerHTML;document.getElementById('reply-body-text').value=document.getElementById('reply-editor').innerText.trim()">
 
         <div class="editor-wrap" style="margin-bottom:12px" id="editor-wrap">
@@ -245,6 +261,15 @@ function replyForm(conv: Conversation): string {
 
         <input type="hidden" name="body_html" id="reply-body-html">
         <input type="hidden" name="body_text" id="reply-body-text">
+
+        <div style="margin-bottom:10px">
+          <label style="font-size:12px;color:var(--t3);cursor:pointer;display:inline-flex;align-items:center;gap:5px">
+            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 002.112 2.13" /></svg>
+            Attach files
+            <input type="file" name="attachments[]" multiple style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" onchange="var names=Array.from(this.files).map(f=>f.name).join(', ');this.parentElement.querySelector('.attach-names').textContent=names||''">
+          </label>
+          <span class="attach-names" style="font-size:12px;color:var(--t2);margin-left:6px"></span>
+        </div>
 
         <div style="display:flex;align-items:center;justify-content:space-between">
           <span id="reply-meta" style="font-size:12px;color:var(--t3)">

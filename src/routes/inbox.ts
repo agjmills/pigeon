@@ -8,10 +8,11 @@ import {
   updateDomainCf, updateDomainProvider, updateDomainDnsRecordIds, updateDomainCatchallRule,
   updateDomainProviderVerified, updateDomainCatchallMailbox,
   createMailbox, updateMailboxCfRuleId, updateMailboxSenderName, getMailboxesByDomain, deleteDomain,
-  createConversation, createMessage,
+  createConversation, createMessage, insertMessageAttachment,
   searchConversations, getConversationsByTag, getTagsForConversations, getTagById,
   createAuditEntry,
 } from '../lib/db'
+import type { EmailAttachment } from '../lib/email-provider'
 import {
   getZoneId, createDnsRecord, deleteDnsRecord,
   createRoutingRule, deleteRoutingRule, createCatchallRule,
@@ -425,6 +426,20 @@ inboxRoutes.post('/compose', async (c) => {
   }
   const mailbox = fromMailbox
 
+  // Collect file attachments
+  const emailAttachments: EmailAttachment[] = []
+  const attachmentFiles = body['attachments[]'] ?? body['attachments']
+  const rawFiles = Array.isArray(attachmentFiles) ? attachmentFiles : attachmentFiles ? [attachmentFiles] : []
+  for (const file of rawFiles) {
+    if (file instanceof File && file.size > 0) {
+      emailAttachments.push({
+        filename: file.name,
+        content: new Uint8Array(await file.arrayBuffer()),
+        contentType: file.type || 'application/octet-stream',
+      })
+    }
+  }
+
   const trackingToken = crypto.randomUUID()
   const pixelUrl = `${c.env.APP_URL}/t/${trackingToken}`
   const pixel = `<img src="${pixelUrl}" width="1" height="1" style="display:none" alt="">`
@@ -438,6 +453,7 @@ inboxRoutes.post('/compose', async (c) => {
     subject,
     text: bodyText || bodyHtml.replace(/<[^>]*>/g, ''),
     html: htmlWithPixel,
+    attachments: emailAttachments.length ? emailAttachments : undefined,
   })
 
   const conversationId = await createConversation(c.env.DB, {
@@ -447,7 +463,7 @@ inboxRoutes.post('/compose', async (c) => {
     customer_name: null,
   })
 
-  await createMessage(c.env.DB, {
+  const msgId = await createMessage(c.env.DB, {
     conversation_id: conversationId,
     direction: 'outbound',
     from_email: from,
@@ -459,6 +475,23 @@ inboxRoutes.post('/compose', async (c) => {
     message_id: messageId,
     tracking_token: trackingToken,
   })
+
+  // Store outbound attachments
+  if (emailAttachments.length) {
+    c.executionCtx.waitUntil((async () => {
+      for (const att of emailAttachments) {
+        const r2Key = `attachments/${msgId}/${crypto.randomUUID()}-${att.filename}`
+        await c.env.ATTACHMENTS.put(r2Key, att.content)
+        await insertMessageAttachment(c.env.DB, {
+          message_id: msgId,
+          filename: att.filename,
+          mime_type: att.contentType,
+          size: att.content.byteLength,
+          r2_key: r2Key,
+        })
+      }
+    })())
+  }
 
   c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
     user_email: user.email,
@@ -705,7 +738,7 @@ function composeForm(opts: {
     <div class="page-wrap" style="max-width:680px">
       <h2 class="page-title">New message</h2>
       ${opts.error ? `<div class="alert alert-error mb-4">${escapeHtml(opts.error)}</div>` : ''}
-      <form method="POST" action="/compose"
+      <form method="POST" action="/compose" enctype="multipart/form-data"
             onsubmit="document.getElementById('compose-body-html').value=document.getElementById('compose-editor').innerHTML; document.getElementById('compose-body-text').value=document.getElementById('compose-editor').innerText.trim()"
             class="space-y-4">
         <div class="compose-row">
@@ -740,6 +773,15 @@ function composeForm(opts: {
 
         <input type="hidden" name="body_html" id="compose-body-html">
         <input type="hidden" name="body_text" id="compose-body-text">
+
+        <div>
+          <label style="font-size:12px;color:var(--t3);cursor:pointer;display:inline-flex;align-items:center;gap:5px">
+            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 002.112 2.13" /></svg>
+            Attach files
+            <input type="file" name="attachments[]" multiple style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" onchange="var names=Array.from(this.files).map(f=>f.name).join(', ');this.parentElement.querySelector('.attach-names').textContent=names||''">
+          </label>
+          <span class="attach-names" style="font-size:12px;color:var(--t2);margin-left:6px"></span>
+        </div>
 
         <div class="flex items-center justify-between pt-2">
           <a href="/" class="btn-text-muted">Cancel</a>

@@ -4,11 +4,12 @@ import type { AppEnv } from '../types'
 import {
   getConversation, getMessages, getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
   createMessage, setConversationStatus, getLastMessageId,
-  getCustomerById, linkConversationToCustomer, createCustomer,
+  getCustomerById, getCustomerByEmail, linkConversationToCustomer, createCustomer,
   markConversationRead, saveAiSummary,
   getTagsForConversation, getAllTags, addTagToConversation, removeTagFromConversation,
-  createAuditEntry,
+  createAuditEntry, getMessageAttachmentsBulk, insertMessageAttachment,
 } from '../lib/db'
+import type { EmailAttachment } from '../lib/email-provider'
 import { createEmailProvider } from '../lib/email-provider'
 import { layout } from '../views/layout'
 import { conversationView, convBodyView } from '../views/conversation'
@@ -39,9 +40,12 @@ conversationRoutes.get('/:id', async (c) => {
 
   if (conv.unread) await markConversationRead(c.env.DB, id)
 
-  const customer = conv.customer_id ? await getCustomerById(c.env.DB, conv.customer_id) : null
+  const [customer, attachments] = await Promise.all([
+    conv.customer_id ? getCustomerById(c.env.DB, conv.customer_id) : Promise.resolve(null),
+    getMessageAttachmentsBulk(c.env.DB, id),
+  ])
 
-  return c.html(layout(conversationView(conv, messages, customer, tags, allTags), {
+  return c.html(layout(conversationView(conv, messages, customer, tags, allTags, attachments), {
     user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes),
     domains, counts, unreadCounts,
     activeMailbox: conv.mailbox_email,
@@ -72,7 +76,25 @@ conversationRoutes.post('/:id/reply', async (c) => {
     return c.text('Forbidden: you do not have permission to send from this mailbox', 403)
   }
 
+  const customer = await getCustomerByEmail(c.env.DB, conv.customer_email)
+  if (customer?.opted_out_at) return c.text('Customer has opted out of emails', 409)
+  if (customer?.bounced_at) return c.text('Email address has previously bounced', 409)
+
   const inReplyTo = await getLastMessageId(c.env.DB, id)
+
+  // Collect file attachments from multipart form
+  const emailAttachments: EmailAttachment[] = []
+  const attachmentFiles = body['attachments[]'] ?? body['attachments']
+  const rawFiles = Array.isArray(attachmentFiles) ? attachmentFiles : attachmentFiles ? [attachmentFiles] : []
+  for (const file of rawFiles) {
+    if (file instanceof File && file.size > 0) {
+      emailAttachments.push({
+        filename: file.name,
+        content: new Uint8Array(await file.arrayBuffer()),
+        contentType: file.type || 'application/octet-stream',
+      })
+    }
+  }
 
   const trackingToken = crypto.randomUUID()
   const pixelUrl = `${c.env.APP_URL}/t/${trackingToken}`
@@ -89,9 +111,10 @@ conversationRoutes.post('/:id/reply', async (c) => {
     text: bodyText || bodyHtml.replace(/<[^>]*>/g, ''),
     html: htmlWithPixel,
     inReplyTo,
+    attachments: emailAttachments.length ? emailAttachments : undefined,
   })
 
-  await createMessage(c.env.DB, {
+  const msgId = await createMessage(c.env.DB, {
     conversation_id: id,
     direction: 'outbound',
     from_email: conv.mailbox_email,
@@ -105,6 +128,23 @@ conversationRoutes.post('/:id/reply', async (c) => {
     tracking_token: trackingToken,
   })
 
+  // Store outbound attachments
+  if (emailAttachments.length) {
+    c.executionCtx.waitUntil((async () => {
+      for (const att of emailAttachments) {
+        const r2Key = `attachments/${msgId}/${crypto.randomUUID()}-${att.filename}`
+        await c.env.ATTACHMENTS.put(r2Key, att.content)
+        await insertMessageAttachment(c.env.DB, {
+          message_id: msgId,
+          filename: att.filename,
+          mime_type: att.contentType,
+          size: att.content.byteLength,
+          r2_key: r2Key,
+        })
+      }
+    })())
+  }
+
   c.executionCtx.waitUntil(createAuditEntry(c.env.DB, {
     user_email: user.email,
     user_name: user.name,
@@ -114,13 +154,14 @@ conversationRoutes.post('/:id/reply', async (c) => {
     metadata: { to: conv.customer_email, subject: conv.subject },
   }))
 
-  const [updatedConv, updatedMessages] = await Promise.all([
+  const [updatedConv, updatedMessages, updatedAttachments] = await Promise.all([
     getConversation(c.env.DB, id),
     getMessages(c.env.DB, id),
+    getMessageAttachmentsBulk(c.env.DB, id),
   ])
 
-  const customer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
-  return c.html(convBodyView(updatedConv!, updatedMessages, customer))
+  const updatedCustomer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
+  return c.html(convBodyView(updatedConv!, updatedMessages, updatedCustomer, updatedAttachments))
 })
 
 conversationRoutes.get('/:id/summary', async (c) => {
@@ -171,9 +212,10 @@ conversationRoutes.post('/:id/status', async (c) => {
   const newStatus = conv.status === 'open' ? 'closed' : 'open'
   await setConversationStatus(c.env.DB, id, newStatus)
 
-  const [updatedConv, messages] = await Promise.all([
+  const [updatedConv, messages, attachments] = await Promise.all([
     getConversation(c.env.DB, id),
     getMessages(c.env.DB, id),
+    getMessageAttachmentsBulk(c.env.DB, id),
   ])
 
   const customer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
@@ -181,7 +223,7 @@ conversationRoutes.post('/:id/status', async (c) => {
     getTagsForConversation(c.env.DB, id),
     getAllTags(c.env.DB),
   ])
-  return c.html(conversationView(updatedConv!, messages, customer, tags, allTags))
+  return c.html(conversationView(updatedConv!, messages, customer, tags, allTags, attachments))
 })
 
 // Add tag to conversation
@@ -234,13 +276,14 @@ conversationRoutes.post('/:id/note', async (c) => {
     body_html: bodyHtml || null,
   })
 
-  const [updatedConv, messages] = await Promise.all([
+  const [updatedConv, messages, attachments] = await Promise.all([
     getConversation(c.env.DB, id),
     getMessages(c.env.DB, id),
+    getMessageAttachmentsBulk(c.env.DB, id),
   ])
 
   const customer = updatedConv?.customer_id ? await getCustomerById(c.env.DB, updatedConv.customer_id) : null
-  return c.html(convBodyView(updatedConv!, messages, customer))
+  return c.html(convBodyView(updatedConv!, messages, customer, attachments))
 })
 
 function summaryHtml(summary: string): string {
