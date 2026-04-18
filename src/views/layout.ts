@@ -650,7 +650,7 @@ export function layout(
       return `
         <a href="/?mailbox=${encodeURIComponent(mb.email)}" hx-boost="true"
            class="nav-item${active ? ' active' : ''}">
-          <span class="nav-item-label">${escapeHtml(mb.name)}</span>
+          <span class="nav-item-label">${escapeHtml(mb.email)}</span>
           ${unread > 0
             ? `<span class="badge">${unread}</span>`
             : open > 0
