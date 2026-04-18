@@ -1,3 +1,4 @@
+import { accessibleMailboxIds, anyContactsLevel } from '../lib/permissions'
 import { Hono } from 'hono'
 import type { AppEnv, Customer, Conversation, Organization } from '../types'
 import {
@@ -13,6 +14,7 @@ export const customerRoutes = new Hono<AppEnv>()
 
 // List all customers
 customerRoutes.get('/', async (c) => {
+  if (!anyContactsLevel(c.get('permissions'), c.get('isAdmin'))) return c.text('Forbidden', 403)
   const user = c.get('user')
   const [customers, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getAllCustomers(c.env.DB),
@@ -21,11 +23,12 @@ customerRoutes.get('/', async (c) => {
     getMailboxCounts(c.env.DB),
     getUnreadCounts(c.env.DB),
   ])
-  return c.html(layout(customersListView(customers), { user, mailboxes, domains, counts, unreadCounts, title: 'Contacts' }))
+  return c.html(layout(customersListView(customers), { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), domains, counts, unreadCounts, title: 'Contacts' }))
 })
 
 // Create customer from a conversation and redirect back
 customerRoutes.post('/from-conversation/:convId', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const convId = parseInt(c.req.param('convId'))
   const conv = await getConversation(c.env.DB, convId)
   if (!conv) return c.notFound()
@@ -41,6 +44,7 @@ customerRoutes.post('/from-conversation/:convId', async (c) => {
 
 // View customer
 customerRoutes.get('/:id', async (c) => {
+  if (!anyContactsLevel(c.get('permissions'), c.get('isAdmin'))) return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
@@ -73,6 +77,7 @@ customerRoutes.get('/:id', async (c) => {
 
 // Update customer
 customerRoutes.post('/:id', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const body = await c.req.parseBody()
 
@@ -86,6 +91,7 @@ customerRoutes.post('/:id', async (c) => {
 
 // Add customer to organization
 customerRoutes.post('/:id/organizations', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const body = await c.req.parseBody()
   const orgId = parseInt(String(body.organization_id))
@@ -97,6 +103,7 @@ customerRoutes.post('/:id/organizations', async (c) => {
 
 // Remove customer from organization
 customerRoutes.post('/:id/organizations/:orgId/remove', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const orgId = parseInt(c.req.param('orgId'))
   await removeCustomerFromOrganization(c.env.DB, id, orgId)

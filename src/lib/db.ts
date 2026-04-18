@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -222,14 +222,15 @@ export async function createMessage(
     message_id?: string | null
     in_reply_to?: string | null
     raw_r2_key?: string | null
+    tracking_token?: string | null
   }
 ): Promise<number> {
   const result = await db
     .prepare(`
       INSERT INTO messages
         (conversation_id, direction, from_email, from_name, to_email, subject,
-         body_text, body_html, message_id, in_reply_to, raw_r2_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         body_text, body_html, message_id, in_reply_to, raw_r2_key, tracking_token)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     .bind(
       data.conversation_id,
@@ -242,7 +243,8 @@ export async function createMessage(
       data.body_html ?? null,
       data.message_id ?? null,
       data.in_reply_to ?? null,
-      data.raw_r2_key ?? null
+      data.raw_r2_key ?? null,
+      data.tracking_token ?? null
     )
     .run()
 
@@ -354,6 +356,13 @@ export async function getUnreadCounts(
     .all<{ mailbox_email: string; count: number }>()
 
   return Object.fromEntries(results.map(r => [r.mailbox_email, r.count]))
+}
+
+export async function markMessageOpened(db: D1Database, trackingToken: string): Promise<void> {
+  await db
+    .prepare('UPDATE messages SET opened_at = unixepoch() WHERE tracking_token = ? AND opened_at IS NULL')
+    .bind(trackingToken)
+    .run()
 }
 
 export async function markConversationRead(db: D1Database, id: number): Promise<void> {
@@ -577,4 +586,138 @@ export async function searchConversations(
 
   const { results } = await db.prepare(sql).bind(...bindings).all<Conversation>()
   return results
+}
+
+// ── Audit log ────────────────────────────────────────────────────────────────
+
+export async function createAuditEntry(
+  db: D1Database,
+  data: {
+    user_email: string
+    user_name?: string | null
+    action: AuditAction
+    conversation_id?: number | null
+    mailbox_email?: string | null
+    metadata?: Record<string, unknown>
+  }
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT INTO audit_log (user_email, user_name, action, conversation_id, mailbox_email, metadata)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `)
+    .bind(
+      data.user_email,
+      data.user_name ?? null,
+      data.action,
+      data.conversation_id ?? null,
+      data.mailbox_email ?? null,
+      data.metadata ? JSON.stringify(data.metadata) : null
+    )
+    .run()
+}
+
+export async function getAuditLog(
+  db: D1Database,
+  opts: { user_email?: string; mailbox_email?: string; limit?: number; offset?: number } = {}
+): Promise<AuditEntry[]> {
+  let sql = 'SELECT * FROM audit_log WHERE 1=1'
+  const bindings: (string | number)[] = []
+
+  if (opts.user_email) {
+    sql += ' AND user_email = ?'
+    bindings.push(opts.user_email)
+  }
+  if (opts.mailbox_email) {
+    sql += ' AND mailbox_email = ?'
+    bindings.push(opts.mailbox_email)
+  }
+
+  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+  bindings.push(opts.limit ?? 100, opts.offset ?? 0)
+
+  const { results } = await db.prepare(sql).bind(...bindings).all<AuditEntry>()
+  return results
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+export async function upsertUser(db: D1Database, email: string, name: string): Promise<void> {
+  await db
+    .prepare('INSERT INTO users (email, name) VALUES (?, ?) ON CONFLICT(email) DO UPDATE SET name = excluded.name')
+    .bind(email, name)
+    .run()
+}
+
+export async function hasAnyAdmin(db: D1Database): Promise<boolean> {
+  const row = await db.prepare('SELECT 1 FROM users WHERE is_admin = 1 LIMIT 1').first()
+  return !!row
+}
+
+export async function setUserAdmin(db: D1Database, email: string, isAdmin: boolean): Promise<void> {
+  await db.prepare('UPDATE users SET is_admin = ? WHERE email = ?').bind(isAdmin ? 1 : 0, email).run()
+}
+
+export async function getAllUsers(db: D1Database): Promise<User[]> {
+  const { results } = await db.prepare('SELECT * FROM users ORDER BY created_at ASC').all<User>()
+  return results
+}
+
+export async function getUserByEmail(db: D1Database, email: string): Promise<User | null> {
+  return db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first<User>()
+}
+
+// ── User permissions ──────────────────────────────────────────────────────────
+
+export async function getUserPermissions(db: D1Database, userEmail: string): Promise<UserPermission[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM user_permissions WHERE user_email = ? ORDER BY resource_type, resource_id')
+    .bind(userEmail)
+    .all<UserPermission>()
+  return results
+}
+
+export async function getPermissionsForResource(
+  db: D1Database,
+  resourceType: ResourceType,
+  resourceId: number
+): Promise<UserPermission[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM user_permissions WHERE resource_type = ? AND resource_id = ? ORDER BY user_email')
+    .bind(resourceType, resourceId)
+    .all<UserPermission>()
+  return results
+}
+
+export async function addUserPermission(
+  db: D1Database,
+  userEmail: string,
+  resourceType: ResourceType,
+  resourceId: number,
+  level: PermissionLevel
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT INTO user_permissions (user_email, resource_type, resource_id, level)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_email, resource_type, resource_id) DO UPDATE SET level = excluded.level
+    `)
+    .bind(userEmail, resourceType, resourceId, level)
+    .run()
+}
+
+export async function removeUserPermission(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM user_permissions WHERE id = ?').bind(id).run()
+}
+
+export async function removeUserPermissionByResource(
+  db: D1Database,
+  userEmail: string,
+  resourceType: ResourceType,
+  resourceId: number
+): Promise<void> {
+  await db
+    .prepare('DELETE FROM user_permissions WHERE user_email = ? AND resource_type = ? AND resource_id = ?')
+    .bind(userEmail, resourceType, resourceId)
+    .run()
 }

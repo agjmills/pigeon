@@ -1,3 +1,4 @@
+import { accessibleMailboxIds, anyContactsLevel } from '../lib/permissions'
 import { Hono } from 'hono'
 import type { AppEnv, Organization, Customer, Conversation } from '../types'
 import {
@@ -12,6 +13,7 @@ export const organizationRoutes = new Hono<AppEnv>()
 
 // List all organizations
 organizationRoutes.get('/', async (c) => {
+  if (!anyContactsLevel(c.get('permissions'), c.get('isAdmin'))) return c.text('Forbidden', 403)
   const user = c.get('user')
   const [organizations, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getAllOrganizations(c.env.DB),
@@ -20,11 +22,12 @@ organizationRoutes.get('/', async (c) => {
     getMailboxCounts(c.env.DB),
     getUnreadCounts(c.env.DB),
   ])
-  return c.html(layout(organizationsListView(organizations), { user, mailboxes, domains, counts, unreadCounts, title: 'Organizations' }))
+  return c.html(layout(organizationsListView(organizations), { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), domains, counts, unreadCounts, title: 'Organizations' }))
 })
 
 // New organization form
 organizationRoutes.get('/new', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const user = c.get('user')
   const [mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getMailboxes(c.env.DB),
@@ -32,11 +35,12 @@ organizationRoutes.get('/new', async (c) => {
     getMailboxCounts(c.env.DB),
     getUnreadCounts(c.env.DB),
   ])
-  return c.html(layout(organizationFormView(), { user, mailboxes, domains, counts, unreadCounts, title: 'New Organization' }))
+  return c.html(layout(organizationFormView(), { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), domains, counts, unreadCounts, title: 'New Organization' }))
 })
 
 // Create organization
 organizationRoutes.post('/', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const body = await c.req.parseBody()
   const name = String(body.name ?? '').trim()
   if (!name) return c.redirect('/organizations/new')
@@ -51,6 +55,7 @@ organizationRoutes.post('/', async (c) => {
 
 // View organization
 organizationRoutes.get('/:id', async (c) => {
+  if (!anyContactsLevel(c.get('permissions'), c.get('isAdmin'))) return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const user = c.get('user')
 
@@ -83,6 +88,7 @@ organizationRoutes.get('/:id', async (c) => {
 
 // Update organization
 organizationRoutes.post('/:id', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const body = await c.req.parseBody()
 
@@ -97,6 +103,7 @@ organizationRoutes.post('/:id', async (c) => {
 
 // Delete organization
 organizationRoutes.post('/:id/delete', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   await deleteOrganization(c.env.DB, id)
   return c.redirect('/organizations')
@@ -104,6 +111,7 @@ organizationRoutes.post('/:id/delete', async (c) => {
 
 // Add member
 organizationRoutes.post('/:id/members', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const body = await c.req.parseBody()
   const customerId = parseInt(String(body.customer_id))
@@ -115,6 +123,7 @@ organizationRoutes.post('/:id/members', async (c) => {
 
 // Remove member
 organizationRoutes.post('/:id/members/:customerId/remove', async (c) => {
+  if (anyContactsLevel(c.get('permissions'), c.get('isAdmin')) !== 'edit') return c.text('Forbidden', 403)
   const id = parseInt(c.req.param('id'))
   const customerId = parseInt(c.req.param('customerId'))
   await removeCustomerFromOrganization(c.env.DB, customerId, id)

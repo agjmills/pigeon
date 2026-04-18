@@ -14,6 +14,8 @@ export type Bindings = {
 
 export type Variables = {
   user: SessionUser
+  isAdmin: boolean
+  permissions: UserPermission[]
 }
 
 export type AppEnv = {
@@ -24,6 +26,7 @@ export type AppEnv = {
 export type SessionUser = {
   email: string
   name: string
+  isAdmin: boolean
 }
 
 export type Domain = {
@@ -81,6 +84,38 @@ export type Organization = {
   updated_at: number
 }
 
+export type PermissionLevel = 'read' | 'edit'
+export type ResourceType = 'domain' | 'mailbox' | 'contacts'
+
+export type User = {
+  email: string
+  name: string | null
+  is_admin: number
+  created_at: number
+}
+
+export type UserPermission = {
+  id: number
+  user_email: string
+  resource_type: ResourceType
+  resource_id: number
+  level: PermissionLevel
+  created_at: number
+}
+
+export type AuditAction = 'reply_sent' | 'compose_sent' | 'note_added'
+
+export type AuditEntry = {
+  id: number
+  user_email: string
+  user_name: string | null
+  action: AuditAction
+  conversation_id: number | null
+  mailbox_email: string | null
+  metadata: string | null
+  created_at: number
+}
+
 export type Tag = {
   id: number
   name: string
@@ -100,5 +135,7 @@ export type Message = {
   body_html: string | null
   message_id: string | null
   in_reply_to: string | null
+  tracking_token: string | null
+  opened_at: number | null
   created_at: number
 }
