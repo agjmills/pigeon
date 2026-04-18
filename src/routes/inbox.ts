@@ -109,9 +109,9 @@ inboxRoutes.post('/mailboxes', async (c) => {
     return c.text('Missing domain', 400)
   }
 
-  if (!localPart) return c.text('Missing fields', 400)
+  const name = String(body.name ?? '').trim()
+  if (!localPart || !name) return c.text('Missing fields', 400)
   const email = `${localPart}@${domainName}`
-  const name = String(body.name ?? '').trim() || email
 
   // Reject duplicates before touching DB or CF
   const existing = await getMailboxByEmail(c.env.DB, email)
@@ -550,9 +550,10 @@ function mailboxForm(opts: {
           <p class="field-hint">Enter just the local part, e.g. <strong>alex</strong> — or paste a full address like alex@cleargym.uk and it will be extracted.</p>
         </div>
         <div>
-          <label class="field-label">Display name <span style="font-weight:400;color:var(--t3)">(optional)</span></label>
-          <input type="text" name="name" value="${escapeHtml(opts.name ?? '')}"
-                 placeholder="Leave blank to use the email address" class="field">
+          <label class="field-label">Sender name</label>
+          <input type="text" name="name" required value="${escapeHtml(opts.name ?? '')}"
+                 placeholder="Cleargym Support" class="field">
+          <p class="field-hint">Shown to recipients as the "From" name.</p>
         </div>
         <button type="submit" class="btn btn-primary w-full">Add mailbox</button>
       </form>
@@ -569,15 +570,16 @@ function editMailboxForm(id: number, name: string, email: string, senderName: st
       <p style="font-size:13px;color:var(--t2);margin-bottom:24px">${escapeHtml(email)}</p>
       <form method="POST" action="/mailboxes/${id}/edit" class="space-y-4">
         <div>
-          <label class="field-label">Mailbox display name</label>
+          <label class="field-label">Sender name</label>
           <input type="text" name="name" required value="${escapeHtml(name)}"
                  placeholder="e.g. Cleargym Support" class="field">
+          <p class="field-hint">Shown to recipients as the "From" name.</p>
         </div>
         <div>
-          <label class="field-label">Sender name <span style="color:var(--t3);font-weight:400">(shown to recipients)</span></label>
+          <label class="field-label">Sender name override <span style="color:var(--t3);font-weight:400">(optional)</span></label>
           <input type="text" name="sender_name" value="${escapeHtml(senderName ?? '')}"
-                 placeholder="e.g. Alex Mills at Cleargym" class="field">
-          <p class="field-hint">If blank, uses the mailbox display name.</p>
+                 placeholder="e.g. Alex Mills" class="field">
+          <p class="field-hint">If set, overrides the sender name for this mailbox specifically.</p>
         </div>
         <div class="flex gap-3">
           <button type="submit" class="btn btn-primary flex-1">Save</button>
