@@ -1,0 +1,25 @@
+name = "pigeon"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+APP_URL = "http://localhost:8787"
+EMAIL_PROVIDER = "test"
+EMAIL_PROVIDER_CONFIG = "{}"
+SESSION_SECRET = "0000000000000000000000000000000000000000000000000000000000000000"
+UNSUBSCRIBE_SECRET = "test-unsubscribe-secret"
+OIDC_ISSUER = "https://auth.test.example"
+OIDC_CLIENT_ID = "test"
+OIDC_CLIENT_SECRET = "test"
+CF_EMAIL_TOKEN = "test"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pigeon-test"
+database_id = "test-db-id"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "pigeon-test-attachments"

@@ -56,6 +56,14 @@ export function supportsDomainManagement(
   return 'setupDomain' in provider && 'verifyDomain' in provider && 'deleteDomain' in provider
 }
 
+// ── Test provider (no-op, for tests only) ───────────────────────────────────
+
+function createTestProvider(): EmailProvider {
+  return {
+    send: async () => ({ messageId: `<test-${crypto.randomUUID()}@test.local>` }),
+  }
+}
+
 // ── Factory ──────────────────────────────────────────────────────────────────
 
 export function createEmailProvider(env: Bindings): EmailProvider {
@@ -66,6 +74,8 @@ export function createEmailProvider(env: Bindings): EmailProvider {
     case 'resend':
       if (!config.apiKey) throw new Error('EMAIL_PROVIDER_CONFIG missing "apiKey" for Resend')
       return createResendProvider(config)
+    case 'test':
+      return createTestProvider()
     default:
       throw new Error(`Unknown email provider: ${name}`)
   }
