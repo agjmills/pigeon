@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { setCookie, deleteCookie, getCookie } from 'hono/cookie'
 import type { AppEnv } from '../types'
 import { escapeHtml } from '../views/layout'
+import { upsertUser, hasAnyAdmin, setUserAdmin } from '../lib/db'
 
 export const authRoutes = new Hono<AppEnv>()
 
@@ -144,6 +145,11 @@ authRoutes.get('/callback', async (c) => {
     .prepare('INSERT INTO sessions (token, user_email, user_name, expires_at) VALUES (?, ?, ?, ?)')
     .bind(sessionToken, userInfo.email, userInfo.name, expiresAt)
     .run()
+
+  await upsertUser(c.env.DB, userInfo.email, userInfo.name)
+  if (!await hasAnyAdmin(c.env.DB)) {
+    await setUserAdmin(c.env.DB, userInfo.email, true)
+  }
 
   deleteCookie(c, 'pkce_verifier', { path: '/' })
   deleteCookie(c, 'oauth_state', { path: '/' })

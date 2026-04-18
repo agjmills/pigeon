@@ -1,3 +1,4 @@
+import { accessibleMailboxIds } from '../lib/permissions'
 import { Hono } from 'hono'
 import type { AppEnv, Tag } from '../types'
 import {
@@ -18,7 +19,7 @@ tagRoutes.get('/', async (c) => {
     getMailboxCounts(c.env.DB),
     getUnreadCounts(c.env.DB),
   ])
-  return c.html(layout(tagsView(tags), { user, mailboxes, domains, counts, unreadCounts, title: 'Tags' }))
+  return c.html(layout(tagsView(tags), { user, mailboxes, accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes), domains, counts, unreadCounts, title: 'Tags' }))
 })
 
 // Create tag
