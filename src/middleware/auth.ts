@@ -1,7 +1,7 @@
 import { createMiddleware } from 'hono/factory'
 import { getCookie } from 'hono/cookie'
 import type { AppEnv } from '../types'
-import { getUserByEmail, getUserPermissions } from '../lib/db'
+import { getUserByEmail, getUserPermissions, getApiTokenByRaw, touchApiToken } from '../lib/db'
 
 const NO_ACCESS_PAGE = `<!DOCTYPE html>
 <html lang="en">
@@ -31,6 +31,28 @@ const NO_ACCESS_PAGE = `<!DOCTYPE html>
 </html>`
 
 export const authMiddleware = createMiddleware<AppEnv>(async (c, next) => {
+  // API token auth
+  const authHeader = c.req.header('Authorization')
+  if (authHeader?.startsWith('Bearer pgn_')) {
+    const rawToken = authHeader.slice(7)
+    const apiToken = await getApiTokenByRaw(c.env.DB, rawToken)
+    if (!apiToken) return c.json({ error: 'Invalid or revoked API token' }, 401)
+
+    const [user, permissions] = await Promise.all([
+      getUserByEmail(c.env.DB, apiToken.user_email),
+      getUserPermissions(c.env.DB, apiToken.user_email),
+    ])
+    if (!user) return c.json({ error: 'Token owner not found' }, 401)
+
+    c.executionCtx.waitUntil(touchApiToken(c.env.DB, apiToken.id))
+    c.set('user', { email: user.email, name: user.name ?? user.email, isAdmin: user.is_admin === 1 })
+    c.set('isAdmin', user.is_admin === 1)
+    c.set('permissions', permissions)
+    await next()
+    return
+  }
+
+  // Session cookie auth
   const token = getCookie(c, 'session')
   if (!token) return c.redirect('/auth/login')
 

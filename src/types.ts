@@ -139,3 +139,12 @@ export type Message = {
   opened_at: number | null
   created_at: number
 }
+
+export type ApiToken = {
+  id: number
+  token_hash: string
+  name: string
+  user_email: string
+  created_at: number
+  last_used_at: number | null
+}

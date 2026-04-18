@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -724,4 +724,45 @@ export async function removeUserPermissionByResource(
     .prepare('DELETE FROM user_permissions WHERE user_email = ? AND resource_type = ? AND resource_id = ?')
     .bind(userEmail, resourceType, resourceId)
     .run()
+}
+
+// ── API tokens ────────────────────────────────────────────────────────────────
+
+async function hashToken(token: string): Promise<string> {
+  const data = new TextEncoder().encode(token)
+  const buf = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+export function generateRawToken(): string {
+  return 'pgn_' + crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
+}
+
+export async function createApiToken(db: D1Database, userEmail: string, name: string, rawToken: string): Promise<void> {
+  const hash = await hashToken(rawToken)
+  await db
+    .prepare('INSERT INTO api_tokens (token_hash, name, user_email) VALUES (?, ?, ?)')
+    .bind(hash, name, userEmail)
+    .run()
+}
+
+export async function getApiTokenByRaw(db: D1Database, rawToken: string): Promise<ApiToken | null> {
+  const hash = await hashToken(rawToken)
+  return db.prepare('SELECT * FROM api_tokens WHERE token_hash = ?').bind(hash).first<ApiToken>()
+}
+
+export async function touchApiToken(db: D1Database, id: number): Promise<void> {
+  await db.prepare('UPDATE api_tokens SET last_used_at = unixepoch() WHERE id = ?').bind(id).run()
+}
+
+export async function getApiTokensForUser(db: D1Database, userEmail: string): Promise<ApiToken[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM api_tokens WHERE user_email = ? ORDER BY created_at DESC')
+    .bind(userEmail)
+    .all<ApiToken>()
+  return results
+}
+
+export async function deleteApiToken(db: D1Database, id: number, userEmail: string): Promise<void> {
+  await db.prepare('DELETE FROM api_tokens WHERE id = ? AND user_email = ?').bind(id, userEmail).run()
 }

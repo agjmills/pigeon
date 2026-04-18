@@ -1,22 +1,20 @@
 import { Hono } from 'hono'
-import type { AppEnv, User, UserPermission, Domain, Mailbox, PermissionLevel, ResourceType } from '../types'
+import type { AppEnv, User, UserPermission, Domain, Mailbox, PermissionLevel, ResourceType, ApiToken } from '../types'
 import {
   getAllUsers, setUserAdmin, getUserPermissions, getUserByEmail,
   addUserPermission, removeUserPermissionByResource,
+  getApiTokensForUser, createApiToken, deleteApiToken, generateRawToken,
   getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
 } from '../lib/db'
 import { accessibleMailboxIds } from '../lib/permissions'
-import { layout, escapeHtml } from '../views/layout'
+import { layout, escapeHtml, formatDate } from '../views/layout'
 
 export const settingsRoutes = new Hono<AppEnv>()
 
-settingsRoutes.use('/*', async (c, next) => {
-  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
-  await next()
-})
 
 // User list
 settingsRoutes.get('/users', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
   const user = c.get('user')
   const [users, mailboxes, domains, counts, unreadCounts] = await Promise.all([
     getAllUsers(c.env.DB),
@@ -34,6 +32,7 @@ settingsRoutes.get('/users', async (c) => {
 
 // Permission editor
 settingsRoutes.get('/users/:email', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
   const user = c.get('user')
   const targetEmail = decodeURIComponent(c.req.param('email'))
   const [targetUser, userPerms, allDomains, allMailboxes, counts, unreadCounts] = await Promise.all([
@@ -54,6 +53,7 @@ settingsRoutes.get('/users/:email', async (c) => {
 
 // Toggle admin
 settingsRoutes.post('/users/:email/admin', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
   const email = decodeURIComponent(c.req.param('email'))
   const body = await c.req.parseBody()
   const isAdmin = body.is_admin === '1'
@@ -63,6 +63,7 @@ settingsRoutes.post('/users/:email/admin', async (c) => {
 
 // Set / remove a permission
 settingsRoutes.post('/users/:email/permissions', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
   const targetEmail = decodeURIComponent(c.req.param('email'))
   const body = await c.req.parseBody()
   const resourceType = String(body.resource_type) as ResourceType
@@ -75,6 +76,54 @@ settingsRoutes.post('/users/:email/permissions', async (c) => {
     await addUserPermission(c.env.DB, targetEmail, resourceType, resourceId, level as PermissionLevel)
   }
   return c.redirect(`/settings/users/${encodeURIComponent(targetEmail)}`)
+})
+
+// ── API tokens ────────────────────────────────────────────────────────────────
+
+settingsRoutes.get('/tokens', async (c) => {
+  const user = c.get('user')
+  const [tokens, mailboxes, domains, counts, unreadCounts] = await Promise.all([
+    getApiTokensForUser(c.env.DB, user.email),
+    getMailboxes(c.env.DB),
+    getDomains(c.env.DB),
+    getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
+  ])
+  return c.html(layout(tokensView(tokens, null), {
+    user, mailboxes, domains, counts, unreadCounts,
+    accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes),
+    title: 'API Tokens',
+  }))
+})
+
+settingsRoutes.post('/tokens', async (c) => {
+  const user = c.get('user')
+  const body = await c.req.parseBody()
+  const name = String(body.name ?? '').trim()
+  if (!name) return c.redirect('/settings/tokens')
+
+  const rawToken = generateRawToken()
+  await createApiToken(c.env.DB, user.email, name, rawToken)
+
+  const [tokens, mailboxes, domains, counts, unreadCounts] = await Promise.all([
+    getApiTokensForUser(c.env.DB, user.email),
+    getMailboxes(c.env.DB),
+    getDomains(c.env.DB),
+    getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
+  ])
+  return c.html(layout(tokensView(tokens, rawToken), {
+    user, mailboxes, domains, counts, unreadCounts,
+    accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), c.get('isAdmin'), mailboxes),
+    title: 'API Tokens',
+  }))
+})
+
+settingsRoutes.post('/tokens/:id/delete', async (c) => {
+  const user = c.get('user')
+  const id = parseInt(c.req.param('id'))
+  await deleteApiToken(c.env.DB, id, user.email)
+  return c.redirect('/settings/tokens')
 })
 
 // ── Views ────────────────────────────────────────────────────────────────────
@@ -227,5 +276,49 @@ function permissionEditorView(
       </p>
 
       ${domains.length ? domainSections : '<p style="font-size:13px;color:var(--t3)">No domains configured yet.</p>'}
+    </div>`
+}
+
+function tokensView(tokens: ApiToken[], newToken: string | null): string {
+  const newTokenBanner = newToken ? `
+    <div class="alert alert-warn" style="margin-bottom:20px">
+      <p style="font-weight:600;margin-bottom:6px">Copy your token now — it won't be shown again.</p>
+      <code style="font-family:monospace;font-size:12px;word-break:break-all;background:var(--bg-alt);padding:8px 10px;border-radius:var(--radius-sm);display:block;margin-top:6px;user-select:all">${escapeHtml(newToken)}</code>
+    </div>` : ''
+
+  const rows = tokens.map(t => `
+    <div class="row-item" style="gap:12px">
+      <div class="flex-1 min-w-0">
+        <p style="font-size:13px;font-weight:500;color:var(--t1)">${escapeHtml(t.name)}</p>
+        <p style="font-size:11.5px;color:var(--t3)">Created ${formatDate(t.created_at)}${t.last_used_at ? ` · Last used ${formatDate(t.last_used_at)}` : ' · Never used'}</p>
+      </div>
+      <form method="POST" action="/settings/tokens/${t.id}/delete" onsubmit="return confirm('Revoke this token?')">
+        <button type="submit" class="btn btn-ghost btn-sm" style="color:var(--danger)">Revoke</button>
+      </form>
+    </div>`).join('')
+
+  return `
+    <div class="page-wrap" style="max-width:640px">
+      <h2 class="page-title">API Tokens</h2>
+
+      ${newTokenBanner}
+
+      <div class="card" style="padding:16px;margin-bottom:24px">
+        <p class="section-title" style="margin-bottom:12px">New token</p>
+        <form method="POST" action="/settings/tokens" style="display:flex;gap:8px">
+          <input type="text" name="name" required placeholder="e.g. LLM agent, CI script"
+                 class="field" style="flex:1">
+          <button type="submit" class="btn btn-primary">Create</button>
+        </form>
+      </div>
+
+      <p class="section-title">Active tokens</p>
+      <div class="row-list">
+        ${tokens.length ? rows : '<p style="font-size:13px;color:var(--t3);padding:16px;text-align:center">No tokens yet.</p>'}
+      </div>
+
+      <div class="alert alert-warn" style="margin-top:16px">
+        Tokens carry your full permissions. Use <code style="font-size:11.5px">Authorization: Bearer &lt;token&gt;</code> in API requests.
+      </div>
     </div>`
 }
