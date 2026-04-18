@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission, MessageAttachment, MailboxWebhook } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -119,7 +119,7 @@ export async function getConversations(
     LEFT JOIN messages m ON m.conversation_id = c.id
     WHERE 1=1
   `
-  const bindings: string[] = []
+  const bindings: (string | number)[] = []
 
   if (opts.mailbox) {
     query += ' AND c.mailbox_email = ?'
@@ -132,9 +132,48 @@ export async function getConversations(
 
   query += ' GROUP BY c.id ORDER BY c.last_message_at DESC LIMIT 100'
 
-  const stmt = db.prepare(query)
-  const { results } = await stmt.bind(...bindings).all<Conversation>()
+  const { results } = await db.prepare(query).bind(...bindings).all<Conversation>()
   return results
+}
+
+export async function getConversationsPaginated(
+  db: D1Database,
+  opts: { mailbox?: string; status?: string; since?: number; limit?: number; offset?: number } = {}
+): Promise<{ conversations: Conversation[]; total: number }> {
+  const limit = opts.limit ?? 50
+  const offset = opts.offset ?? 0
+
+  let where = 'WHERE 1=1'
+  const bindings: (string | number)[] = []
+
+  if (opts.mailbox) {
+    where += ' AND c.mailbox_email = ?'
+    bindings.push(opts.mailbox)
+  }
+  if (opts.status) {
+    where += ' AND c.status = ?'
+    bindings.push(opts.status)
+  }
+  if (opts.since) {
+    where += ' AND c.last_message_at > ?'
+    bindings.push(opts.since)
+  }
+
+  const dataQuery = `
+    SELECT c.*, COUNT(m.id) as message_count
+    FROM conversations c
+    LEFT JOIN messages m ON m.conversation_id = c.id
+    ${where}
+    GROUP BY c.id ORDER BY c.last_message_at DESC LIMIT ? OFFSET ?
+  `
+  const countQuery = `SELECT COUNT(*) as count FROM conversations c ${where}`
+
+  const [{ results }, countRow] = await Promise.all([
+    db.prepare(dataQuery).bind(...bindings, limit, offset).all<Conversation>(),
+    db.prepare(countQuery).bind(...bindings).first<{ count: number }>(),
+  ])
+
+  return { conversations: results, total: countRow?.count ?? 0 }
 }
 
 export async function getConversation(db: D1Database, id: number): Promise<Conversation | null> {
@@ -300,6 +339,35 @@ export async function createCustomer(db: D1Database, data: { email: string; name
   if (result.meta.last_row_id) return result.meta.last_row_id as number
   const existing = await getCustomerByEmail(db, data.email)
   return existing!.id
+}
+
+export async function upsertCustomer(
+  db: D1Database,
+  data: { email: string; name?: string | null; notes?: string | null }
+): Promise<{ id: number; created: boolean }> {
+  const result = await db
+    .prepare('INSERT OR IGNORE INTO customers (email, name, notes) VALUES (?, ?, ?)')
+    .bind(data.email, data.name ?? null, data.notes ?? null)
+    .run()
+  if (result.meta.changes > 0 && result.meta.last_row_id) {
+    return { id: result.meta.last_row_id as number, created: true }
+  }
+  const existing = await getCustomerByEmail(db, data.email)
+  return { id: existing!.id, created: false }
+}
+
+export async function setCustomerOptedOut(db: D1Database, id: number, optedOut: boolean): Promise<void> {
+  const sql = optedOut
+    ? 'UPDATE customers SET opted_out_at = unixepoch(), updated_at = unixepoch() WHERE id = ?'
+    : 'UPDATE customers SET opted_out_at = NULL, updated_at = unixepoch() WHERE id = ?'
+  await db.prepare(sql).bind(id).run()
+}
+
+export async function setCustomerBounced(db: D1Database, email: string, bouncedAt: number | null): Promise<void> {
+  await db
+    .prepare('UPDATE customers SET bounced_at = ?, updated_at = unixepoch() WHERE email = ?')
+    .bind(bouncedAt, email)
+    .run()
 }
 
 export async function updateCustomer(db: D1Database, id: number, data: { name?: string; notes?: string }): Promise<void> {
@@ -810,4 +878,76 @@ export async function removeApiTokenPermission(
     .prepare('DELETE FROM api_token_permissions WHERE token_id = ? AND resource_type = ? AND resource_id = ?')
     .bind(tokenId, resourceType, resourceId)
     .run()
+}
+
+// ── Message attachments ───────────────────────────────────────────────────────
+
+export async function insertMessageAttachment(
+  db: D1Database,
+  data: { message_id: number; filename: string; mime_type: string; size: number; r2_key: string }
+): Promise<number> {
+  const result = await db
+    .prepare('INSERT INTO message_attachments (message_id, filename, mime_type, size, r2_key) VALUES (?, ?, ?, ?, ?)')
+    .bind(data.message_id, data.filename, data.mime_type, data.size, data.r2_key)
+    .run()
+  return result.meta.last_row_id as number
+}
+
+export async function getMessageAttachment(db: D1Database, id: number): Promise<MessageAttachment | null> {
+  return db.prepare('SELECT * FROM message_attachments WHERE id = ?').bind(id).first<MessageAttachment>()
+}
+
+export async function getMessageAttachmentsBulk(
+  db: D1Database,
+  conversationId: number
+): Promise<Record<number, MessageAttachment[]>> {
+  const { results } = await db
+    .prepare(`
+      SELECT ma.* FROM message_attachments ma
+      JOIN messages m ON m.id = ma.message_id
+      WHERE m.conversation_id = ?
+      ORDER BY ma.created_at ASC
+    `)
+    .bind(conversationId)
+    .all<MessageAttachment>()
+  const map: Record<number, MessageAttachment[]> = {}
+  for (const a of results) {
+    if (!map[a.message_id]) map[a.message_id] = []
+    map[a.message_id].push(a)
+  }
+  return map
+}
+
+// ── Mailbox webhooks ──────────────────────────────────────────────────────────
+
+export async function getWebhooksForMailbox(db: D1Database, mailboxEmail: string): Promise<MailboxWebhook[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM mailbox_webhooks WHERE mailbox_email = ? ORDER BY created_at ASC')
+    .bind(mailboxEmail)
+    .all<MailboxWebhook>()
+  return results
+}
+
+export async function getAllWebhooks(db: D1Database): Promise<MailboxWebhook[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM mailbox_webhooks ORDER BY mailbox_email, created_at ASC')
+    .all<MailboxWebhook>()
+  return results
+}
+
+export async function createMailboxWebhook(
+  db: D1Database,
+  mailboxEmail: string,
+  url: string,
+  secret: string
+): Promise<number> {
+  const result = await db
+    .prepare('INSERT INTO mailbox_webhooks (mailbox_email, url, secret) VALUES (?, ?, ?)')
+    .bind(mailboxEmail, url, secret)
+    .run()
+  return result.meta.last_row_id as number
+}
+
+export async function deleteMailboxWebhook(db: D1Database, id: number): Promise<void> {
+  await db.prepare('DELETE FROM mailbox_webhooks WHERE id = ?').bind(id).run()
 }

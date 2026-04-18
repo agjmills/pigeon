@@ -10,6 +10,8 @@ export type Bindings = {
   EMAIL_PROVIDER_CONFIG: string
   SESSION_SECRET: string
   CF_EMAIL_TOKEN: string
+  UNSUBSCRIBE_SECRET?: string
+  RATE_LIMITER?: RateLimit
 }
 
 export type PermissionGrant = {
@@ -77,6 +79,8 @@ export type Customer = {
   email: string
   name: string | null
   notes: string | null
+  opted_out_at: number | null
+  bounced_at: number | null
   created_at: number
   updated_at: number
 }
@@ -144,6 +148,28 @@ export type Message = {
   tracking_token: string | null
   opened_at: number | null
   created_at: number
+}
+
+export type MessageAttachment = {
+  id: number
+  message_id: number
+  filename: string
+  mime_type: string
+  size: number
+  r2_key: string
+  created_at: number
+}
+
+export type MailboxWebhook = {
+  id: number
+  mailbox_email: string
+  url: string
+  secret: string
+  created_at: number
+}
+
+export type RateLimit = {
+  limit(opts: { key: string }): Promise<{ success: boolean }>
 }
 
 export type ApiToken = {

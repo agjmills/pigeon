@@ -1,5 +1,11 @@
 import type { EmailProvider, EmailDomainProvider, DnsRecord, DnsRecordPurpose, SendEmailOptions } from '../email-provider'
 
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+  return btoa(binary)
+}
+
 type ResendDnsRecord = {
   record: string
   name: string
@@ -104,6 +110,13 @@ export function createResendProvider(config: ResendConfig): EmailProvider & Emai
         headers: emailHeaders,
       }
       if (opts.html) payload.html = opts.html
+      if (opts.attachments?.length) {
+        payload.attachments = opts.attachments.map(a => ({
+          filename: a.filename,
+          content: uint8ToBase64(a.content),
+          content_type: a.contentType,
+        }))
+      }
 
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',

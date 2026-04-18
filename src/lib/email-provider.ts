@@ -24,6 +24,12 @@ export interface EmailDomainProvider {
 
 // ── Email Sending ────────────────────────────────────────────────────────────
 
+export type EmailAttachment = {
+  filename: string
+  content: Uint8Array
+  contentType: string
+}
+
 export type SendEmailOptions = {
   from: string
   fromName: string
@@ -33,6 +39,7 @@ export type SendEmailOptions = {
   html?: string | null
   inReplyTo?: string | null
   references?: string | null
+  attachments?: EmailAttachment[]
 }
 
 export interface EmailSender {

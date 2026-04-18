@@ -30,3 +30,11 @@ compatibility_flags = ["nodejs_compat"]
 #                            #   SES:     {"accessKeyId":"...","secretAccessKey":"...","region":"us-east-1"}
 #                            #   SMTP:    {"host":"smtp.example.com","port":587,"user":"...","pass":"..."}
 #   SESSION_SECRET           random 32-byte hex
+#   UNSUBSCRIBE_SECRET       random secret for HMAC-signed unsubscribe tokens
+#
+# Rate limiting (Workers paid plan — add to wrangler.local.toml to enable):
+# [[unsafe.bindings]]
+# name = "RATE_LIMITER"
+# type = "ratelimit"
+# namespace_id = "1001"
+# simple = { limit = 60, period = 60 }
