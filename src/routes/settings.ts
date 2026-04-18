@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import type { AppEnv, User, UserPermission, Domain, Mailbox, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission } from '../types'
+import type { AppEnv, User, UserPermission, Domain, Mailbox, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission, MailboxWebhook } from '../types'
 import {
   getAllUsers, setUserAdmin, getUserPermissions, getUserByEmail,
   addUserPermission, removeUserPermissionByResource,
@@ -7,6 +7,7 @@ import {
   getApiTokenById, setApiTokenScoped, getApiTokenPermissions,
   addApiTokenPermission, removeApiTokenPermission,
   getMailboxes, getMailboxCounts, getUnreadCounts, getDomains,
+  getAllWebhooks, createMailboxWebhook, deleteMailboxWebhook,
 } from '../lib/db'
 import { accessibleMailboxIds } from '../lib/permissions'
 import { layout, escapeHtml, formatDate } from '../views/layout'
@@ -495,5 +496,91 @@ function tokenPermissionEditorView(
       </p>
 
       ${domains.length ? domainSections : '<p style="font-size:13px;color:var(--t3)">No domains configured yet.</p>'}
+    </div>`
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+
+settingsRoutes.get('/webhooks', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
+  const user = c.get('user')
+  const [webhooks, mailboxes, domains, counts, unreadCounts] = await Promise.all([
+    getAllWebhooks(c.env.DB),
+    getMailboxes(c.env.DB),
+    getDomains(c.env.DB),
+    getMailboxCounts(c.env.DB),
+    getUnreadCounts(c.env.DB),
+  ])
+  return c.html(layout(webhooksView(webhooks, mailboxes), {
+    user, mailboxes, domains, counts, unreadCounts,
+    accessibleMailboxIds: accessibleMailboxIds(c.get('permissions'), true, mailboxes),
+    title: 'Webhooks',
+  }))
+})
+
+settingsRoutes.post('/webhooks', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
+  const body = await c.req.parseBody()
+  const mailboxEmail = String(body.mailbox_email ?? '').trim()
+  const url = String(body.url ?? '').trim()
+  if (!mailboxEmail || !url) return c.redirect('/settings/webhooks')
+  const secret = crypto.randomUUID().replace(/-/g, '')
+  await createMailboxWebhook(c.env.DB, mailboxEmail, url, secret)
+  return c.redirect('/settings/webhooks')
+})
+
+settingsRoutes.post('/webhooks/:id/delete', async (c) => {
+  if (!c.get('isAdmin')) return c.text('Forbidden', 403)
+  const id = parseInt(c.req.param('id'))
+  await deleteMailboxWebhook(c.env.DB, id)
+  return c.redirect('/settings/webhooks')
+})
+
+function webhooksView(webhooks: MailboxWebhook[], mailboxes: Mailbox[]): string {
+  const rows = webhooks.map(wh => `
+    <div class="row-item" style="flex-direction:column;gap:6px;align-items:stretch">
+      <div style="display:flex;align-items:center;gap:8px">
+        <code style="font-size:12px;color:var(--t2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(wh.mailbox_email)}</code>
+        <span style="font-size:11.5px;color:var(--t3)">${formatDate(wh.created_at)}</span>
+        <form method="POST" action="/settings/webhooks/${wh.id}/delete" style="flex-shrink:0">
+          <button type="submit" class="btn-text-muted" title="Delete webhook">✕</button>
+        </form>
+      </div>
+      <div>
+        <code style="font-size:12px;color:var(--accent);word-break:break-all">${escapeHtml(wh.url)}</code>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:11.5px;color:var(--t3)">Secret:</span>
+        <code style="font-size:11px;color:var(--t3);user-select:all">${escapeHtml(wh.secret)}</code>
+      </div>
+    </div>`).join('')
+
+  const mailboxOptions = mailboxes.map(mb =>
+    `<option value="${escapeHtml(mb.email)}">${escapeHtml(mb.name)} &lt;${escapeHtml(mb.email)}&gt;</option>`
+  ).join('')
+
+  return `
+    <div class="page-wrap" style="max-width:720px">
+      <h2 class="page-title">Webhooks</h2>
+      <p style="font-size:13px;color:var(--t3);margin-bottom:24px">
+        Pigeon will POST a signed JSON payload to the registered URL whenever a new inbound message is received.
+        Verify the signature with <code>X-Pigeon-Signature: sha256=&lt;hmac-sha256-hex&gt;</code>.
+      </p>
+
+      <div class="row-list mb-8">
+        ${webhooks.length ? rows : '<p style="font-size:13px;color:var(--t3);padding:16px;text-align:center">No webhooks configured.</p>'}
+      </div>
+
+      <form method="POST" action="/settings/webhooks" class="space-y-4">
+        <p class="section-title">Add webhook</p>
+        <div style="display:flex;gap:8px">
+          <select name="mailbox_email" class="field" style="flex:0 0 auto">
+            ${mailboxOptions || '<option value="">No mailboxes</option>'}
+          </select>
+          <input type="url" name="url" placeholder="https://your-server.example.com/hook" required class="field" style="flex:1">
+          <button type="submit" class="btn btn-primary btn-sm" style="flex-shrink:0">Add</button>
+        </div>
+        <p style="font-size:12px;color:var(--t3)">A random signing secret is generated automatically. Use it to verify the <code>X-Pigeon-Signature</code> header.</p>
+      </form>
     </div>`
 }
