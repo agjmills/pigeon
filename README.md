@@ -4,6 +4,8 @@ Self-hosted multi-domain email inbox built on Cloudflare Workers, D1, R2, and HT
 
 **Everything runs on the Cloudflare free tier** (Workers, D1, R2). Outbound sending uses a configurable provider — [Resend](https://resend.com) ships out of the box (free up to 3,000/month), with an interface ready for SES, Postmark, SMTP, or anything else.
 
+> **Domain email control**: Cloudflare Email Routing — especially when using catch-all rules — routes *all* inbound email for your domain through Pigeon. This gives the Worker (and anyone with access to your Cloudflare account or deployment) full visibility into every message received at that domain. Only deploy Pigeon on domains where you intend it to be the sole email handler, and treat your Cloudflare credentials accordingly.
+
 ## How it works
 
 ```
@@ -128,6 +130,12 @@ npx wrangler secret put EMAIL_PROVIDER_CONFIG
 ### Adding a new provider
 
 Create a file in `src/lib/providers/` that implements `EmailSender` (required) and optionally `EmailDomainProvider` (for providers that manage domains and DNS records). Add a case to the factory switch in `src/lib/email-provider.ts`. See `src/lib/providers/resend.ts` for a reference implementation.
+
+## Open tracking
+
+Pigeon injects a 1×1 tracking pixel into outgoing HTML emails. When the recipient's mail client loads it, Pigeon records the first open time and displays an **Opened** badge in the conversation thread. No extra configuration is required — the pixel endpoint (`/t/:token`) is public and runs alongside the main Worker.
+
+Note that open tracking is inherently imprecise: Apple Mail Privacy Protection, Gmail image caching, and many corporate proxies load images automatically, which can produce false positives. Use it as a rough signal rather than a definitive read receipt.
 
 ## Local development
 
