@@ -345,15 +345,15 @@ export async function upsertCustomer(
   db: D1Database,
   data: { email: string; name?: string | null; notes?: string | null }
 ): Promise<{ id: number; created: boolean }> {
-  const result = await db
-    .prepare('INSERT OR IGNORE INTO customers (email, name, notes) VALUES (?, ?, ?)')
+  const before = await getCustomerByEmail(db, data.email)
+  await db
+    .prepare(`INSERT INTO customers (email, name, notes) VALUES (?, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET name = excluded.name, notes = excluded.notes, updated_at = unixepoch()`)
     .bind(data.email, data.name ?? null, data.notes ?? null)
     .run()
-  if (result.meta.changes > 0 && result.meta.last_row_id) {
-    return { id: result.meta.last_row_id as number, created: true }
-  }
-  const existing = await getCustomerByEmail(db, data.email)
-  return { id: existing!.id, created: false }
+  if (before) return { id: before.id, created: false }
+  const after = await getCustomerByEmail(db, data.email)
+  return { id: after!.id, created: true }
 }
 
 export async function setCustomerOptedOut(db: D1Database, id: number, optedOut: boolean): Promise<void> {

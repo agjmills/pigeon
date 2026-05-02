@@ -2,44 +2,25 @@ name = "pigeon"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
 
-# Copy wrangler.toml to wrangler.local.toml and fill in your values.
-# wrangler.local.toml is gitignored.
-#
-# Local dev auth bypass — add ONLY to wrangler.local.toml, never here:
-#   DEV_EMAIL = "you@example.com"
-# When set, /auth/login creates a session for that address directly,
-# skipping OIDC. The account is made admin on first run if none exists.
-#
-# [vars]
-# OIDC_ISSUER = "https://auth.example.com/..."   # OIDC discovery base — must expose /.well-known/openid-configuration
-# OIDC_CLIENT_ID = "pigeon"
-# APP_URL = "https://pigeon.example.com"
-#
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "pigeon"
-# database_id = ""          # wrangler d1 create pigeon
-#
-# [[r2_buckets]]
-# binding = "ATTACHMENTS"
-# bucket_name = "pigeon-attachments"
-#
-# [vars]
-# EMAIL_PROVIDER = "resend"   # "resend" (default) — add new providers in src/lib/providers/
-#
-# Secrets (never in toml — set via: wrangler secret put <NAME>):
-#   OIDC_CLIENT_SECRET
-#   EMAIL_PROVIDER_CONFIG    # JSON — provider-specific credentials, e.g.:
-#                            #   Resend:  {"apiKey":"re_..."}
-#                            #   SES:     {"accessKeyId":"...","secretAccessKey":"...","region":"us-east-1"}
-#                            #   SMTP:    {"host":"smtp.example.com","port":587,"user":"...","pass":"..."}
-#   SESSION_SECRET           random 32-byte hex
-#   UNSUBSCRIBE_SECRET       random secret for HMAC-signed unsubscribe tokens
-#
-# Rate limiting (Workers paid plan — add to wrangler.local.toml to enable):
-# [[unsafe.bindings]]
-# name = "RATE_LIMITER"
-# type = "ratelimit"
-# namespace_id = "1001"
-# simple = { limit = 60, period = 60 }
+[[routes]]
+pattern = "pigeon.asdfx.us"
+custom_domain = true
+
+[vars]
+OIDC_ISSUER = "https://auth.asdfx.us/application/o/pigeon"
+OIDC_CLIENT_ID = "GW80X94syMV6JgH3UI2T5ad7Gm8MVxbQ3jOHJIOd"
+APP_URL = "https://pigeon.asdfx.us"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pigeon"
+database_id = "1d036779-41bd-4c01-827f-47342a43ff4f"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "pigeon-attachments"
+
+[ai]
+binding = "AI"
