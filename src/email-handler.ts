@@ -4,7 +4,7 @@ import {
   getMailbox, getDomainByName, findConversationByMessageId, findOpenConversationBySubject,
   createConversation, createMessage, markConversationUnread, linkConversationToCustomer,
   setCustomerBounced, insertMessageAttachment, updateMessageBodyHtml, getWebhooksForMailbox,
-  getCustomerByEmail,
+  getCustomerByEmail, setConversationStatus,
 } from './lib/db'
 
 export async function emailHandler(
@@ -111,6 +111,7 @@ export async function emailHandler(
   })
 
   await markConversationUnread(env.DB, conversationId)
+  await setConversationStatus(env.DB, conversationId, 'open')
 
   // Store inbound attachments in R2 and resolve CID references in HTML
   if (parsed.attachments?.length) {
