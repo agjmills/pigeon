@@ -191,3 +191,11 @@ export type ApiTokenPermission = {
   resource_id: number
   level: PermissionLevel
 }
+
+export type DoNotContact = {
+  id: number
+  email: string
+  name: string | null
+  reason: string
+  created_at: number
+}

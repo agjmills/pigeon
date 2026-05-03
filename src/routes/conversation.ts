@@ -7,7 +7,7 @@ import {
   getCustomerById, getCustomerByEmail, linkConversationToCustomer, createCustomer,
   markConversationRead, saveAiSummary,
   getTagsForConversation, getAllTags, addTagToConversation, removeTagFromConversation,
-  createAuditEntry, getMessageAttachmentsBulk, insertMessageAttachment,
+  createAuditEntry, getMessageAttachmentsBulk, insertMessageAttachment, getDoNotContact,
 } from '../lib/db'
 import type { EmailAttachment } from '../lib/email-provider'
 import { createEmailProvider } from '../lib/email-provider'
@@ -76,7 +76,11 @@ conversationRoutes.post('/:id/reply', async (c) => {
     return c.text('Forbidden: you do not have permission to send from this mailbox', 403)
   }
 
-  const customer = await getCustomerByEmail(c.env.DB, conv.customer_email)
+  const [customer, dnc] = await Promise.all([
+    getCustomerByEmail(c.env.DB, conv.customer_email),
+    getDoNotContact(c.env.DB, conv.customer_email),
+  ])
+  if (dnc) return c.text(`This address is on the do-not-contact list: ${dnc.reason}`, 409)
   if (customer?.opted_out_at) return c.text('Customer has opted out of emails', 409)
   if (customer?.bounced_at) return c.text('Email address has previously bounced', 409)
 

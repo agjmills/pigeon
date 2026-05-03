@@ -1,4 +1,4 @@
-import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission, MessageAttachment, MailboxWebhook } from '../types'
+import type { Conversation, Message, Mailbox, Domain, Customer, Organization, Tag, AuditAction, AuditEntry, User, UserPermission, PermissionLevel, ResourceType, ApiToken, ApiTokenPermission, MessageAttachment, MailboxWebhook, DoNotContact } from '../types'
 
 // ── Domains ───────────────────────────────────────────────────────────────────
 
@@ -954,4 +954,25 @@ export async function createMailboxWebhook(
 
 export async function deleteMailboxWebhook(db: D1Database, id: number): Promise<void> {
   await db.prepare('DELETE FROM mailbox_webhooks WHERE id = ?').bind(id).run()
+}
+
+// ── Do Not Contact ────────────────────────────────────────────────────────────
+
+export async function getDoNotContact(db: D1Database, email: string): Promise<DoNotContact | null> {
+  return db.prepare('SELECT * FROM do_not_contact WHERE email = ?').bind(email.toLowerCase()).first<DoNotContact>()
+}
+
+export async function getAllDoNotContact(db: D1Database): Promise<DoNotContact[]> {
+  const { results } = await db.prepare('SELECT * FROM do_not_contact ORDER BY created_at DESC').all<DoNotContact>()
+  return results
+}
+
+export async function insertDoNotContact(
+  db: D1Database,
+  data: { email: string; name?: string | null; reason: string }
+): Promise<void> {
+  await db
+    .prepare('INSERT OR IGNORE INTO do_not_contact (email, name, reason) VALUES (?, ?, ?)')
+    .bind(data.email.toLowerCase(), data.name ?? null, data.reason)
+    .run()
 }

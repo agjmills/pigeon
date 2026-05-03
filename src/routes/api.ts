@@ -5,7 +5,7 @@ import {
   getConversation, getMessages, getMailboxes, getConversationsPaginated,
   createMessage, createConversation, getLastMessageId, createAuditEntry,
   upsertCustomer, setCustomerOptedOut, setConversationStatus,
-  insertMessageAttachment,
+  insertMessageAttachment, getDoNotContact,
 } from '../lib/db'
 import { canReadMailbox, canSendFrom, anyContactsLevel } from '../lib/permissions'
 import { createEmailProvider } from '../lib/email-provider'
@@ -300,7 +300,11 @@ apiRoutes.post('/compose', async (c) => {
     return c.json({ error: 'Forbidden' }, 403)
   }
 
-  const customer = await getCustomerByEmail(c.env.DB, body.to)
+  const [customer, dnc] = await Promise.all([
+    getCustomerByEmail(c.env.DB, body.to),
+    getDoNotContact(c.env.DB, body.to),
+  ])
+  if (dnc) return c.json({ error: `This address is on the do-not-contact list: ${dnc.reason}` }, 409)
   if (customer?.opted_out_at) return c.json({ error: 'Customer has opted out' }, 409)
   if (customer?.bounced_at) return c.json({ error: 'Email address has bounced' }, 409)
 
