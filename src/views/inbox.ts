@@ -6,7 +6,7 @@ export function inboxView(
   opts: { mailbox?: string; status?: string; search?: string; tag?: string; tagName?: string },
   tagsByConversation: Record<number, Tag[]> = {}
 ): string {
-  const status = opts.status ?? 'open'
+  const status = opts.status ?? 'needs_reply'
   const mp = opts.mailbox ? `&mailbox=${encodeURIComponent(opts.mailbox)}` : ''
   const tp = opts.tag ? `&tag=${encodeURIComponent(opts.tag)}` : ''
 
@@ -39,12 +39,16 @@ export function inboxView(
 
   const tabs = opts.search ? '' : `
     <div class="tabs">
-      <a href="/?status=open${mp}${tp}"  hx-boost="true" class="tab${status === 'open'   ? ' active' : ''}">Open</a>
-      <a href="/?status=closed${mp}${tp}" hx-boost="true" class="tab${status === 'closed' ? ' active' : ''}">Closed</a>
+      <a href="/?status=needs_reply${mp}${tp}" hx-boost="true" class="tab${status === 'needs_reply' ? ' active' : ''}">Needs reply</a>
+      <a href="/?status=waiting${mp}${tp}"     hx-boost="true" class="tab${status === 'waiting'     ? ' active' : ''}">Waiting</a>
+      <a href="/?status=closed${mp}${tp}"      hx-boost="true" class="tab${status === 'closed'      ? ' active' : ''}">Closed</a>
     </div>`
 
   if (conversations.length === 0) {
-    const emptyMsg = opts.search ? 'No results found' : `No ${status} conversations`
+    const emptyMsg = opts.search ? 'No results found'
+      : status === 'needs_reply' ? 'No replies waiting'
+      : status === 'waiting' ? 'Nothing waiting for a reply'
+      : `No ${status} conversations`
     return `${searchBar}${tagFilter}${searchInfo}${tabs}
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:var(--t3)">
         <svg width="36" height="36" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor" style="margin-bottom:10px">

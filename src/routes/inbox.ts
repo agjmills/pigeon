@@ -26,7 +26,7 @@ export const inboxRoutes = new Hono<AppEnv>()
 inboxRoutes.get('/', async (c) => {
   const user = c.get('user')
   const mailbox = c.req.query('mailbox')
-  const status = c.req.query('status') ?? 'open'
+  const status = c.req.query('status') ?? 'needs_reply'
   const search = c.req.query('q')?.trim() || undefined
   const tagFilter = c.req.query('tag') ? parseInt(c.req.query('tag')!) : undefined
 

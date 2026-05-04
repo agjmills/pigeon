@@ -113,6 +113,11 @@ export async function getConversations(
   db: D1Database,
   opts: { mailbox?: string; status?: string } = {}
 ): Promise<Conversation[]> {
+  const lastDirectionExpr = `COALESCE(
+      (SELECT direction FROM messages mi WHERE mi.conversation_id = c.id AND mi.direction != 'note' ORDER BY mi.created_at DESC LIMIT 1),
+      'outbound'
+    )`
+
   let query = `
     SELECT c.*, COUNT(m.id) as message_count
     FROM conversations c
@@ -125,7 +130,11 @@ export async function getConversations(
     query += ' AND c.mailbox_email = ?'
     bindings.push(opts.mailbox)
   }
-  if (opts.status) {
+  if (opts.status === 'needs_reply') {
+    query += ` AND c.status = 'open' AND ${lastDirectionExpr} = 'inbound'`
+  } else if (opts.status === 'waiting') {
+    query += ` AND c.status = 'open' AND ${lastDirectionExpr} = 'outbound'`
+  } else if (opts.status) {
     query += ' AND c.status = ?'
     bindings.push(opts.status)
   }
@@ -207,7 +216,6 @@ export async function findOpenConversationBySubject(
       SELECT * FROM conversations
       WHERE mailbox_email = ?
         AND customer_email = ?
-        AND status = 'open'
         AND (subject = ? OR subject = ? OR subject LIKE ?)
       ORDER BY last_message_at DESC
       LIMIT 1
